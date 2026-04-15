@@ -1,0 +1,243 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { ArrowLeft, Send, Paperclip, X, Loader2 } from 'lucide-react';
+
+export default function ChatPage() {
+  const { userId } = useParams();
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [receiverName, setReceiverName] = useState('');
+  const [receiverInitial, setReceiverInitial] = useState('');
+  const [receiverLogo, setReceiverLogo] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  
+  const token = localStorage.getItem('token');
+  const userStr = localStorage.getItem('user');
+  const currentUser = userStr ? JSON.parse(userStr) : null;
+  const currentUserId = currentUser?.id || '';
+
+  useEffect(() => {
+    if (!currentUserId || !token || !userId) return;
+
+    // Fetch receiver info
+    fetch(`/api/users/${userId}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(async (userData) => {
+        if (userData) {
+          // If business role, try to show store name
+          if (['retailer', 'supplier', 'brand', 'manufacturer'].includes(userData.role)) {
+            try {
+              const storeRes = await fetch(`/api/users/${userId}/store`);
+              const storeData = await storeRes.json();
+              if (storeData?.storeName) {
+                setReceiverName(storeData.storeName);
+                setReceiverInitial(storeData.storeName.charAt(0));
+                setReceiverLogo(storeData.logoUrl || '');
+                return;
+              }
+            } catch {}
+          }
+          setReceiverName(userData.name || 'User');
+          setReceiverInitial((userData.name || 'U').charAt(0));
+        }
+      })
+      .catch(() => {
+        setReceiverName('User');
+        setReceiverInitial('U');
+      });
+
+    // Fetch messages
+    fetchMessages();
+
+    // Poll for new messages every 3 seconds (reliable fallback)
+    pollRef.current = setInterval(fetchMessages, 3000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [userId]);
+
+  const fetchMessages = () => {
+    if (!currentUserId || !token || !userId) return;
+    fetch(`/api/messages/${currentUserId}/${userId}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => {
+        if (!res.ok) throw new Error('Failed to fetch messages');
+        return res.json();
+      })
+      .then(data => setMessages(data))
+      .catch(err => console.error(err));
+  };
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setImageFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    }
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if ((!newMessage.trim() && !imageFile) || isSending) return;
+
+    setIsSending(true);
+    let uploadedImageUrl = null;
+
+    if (imageFile) {
+      const formData = new FormData();
+      formData.append('file', imageFile);
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        });
+        if (res.ok) {
+          const data = await res.json();
+          uploadedImageUrl = data.url;
+        }
+      } catch (e) { console.error('Failed to upload', e); }
+    }
+
+    // Send via HTTP POST (reliable)
+    try {
+      const res = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({
+          receiverId: userId,
+          message: newMessage,
+          imageUrl: uploadedImageUrl
+        })
+      });
+
+      if (res.ok) {
+        const savedMsg = await res.json();
+        // Add to messages immediately (optimistic)
+        setMessages(prev => {
+          // Avoid duplicate if socket already delivered it
+          if (prev.some(m => m.id === savedMsg.id)) return prev;
+          return [...prev, savedMsg];
+        });
+      } else {
+        console.error('Failed to send message');
+      }
+    } catch (e) { 
+      console.error('Message send error:', e); 
+    }
+
+    setNewMessage('');
+    setImageFile(null);
+    setImagePreview('');
+    setIsSending(false);
+  };
+
+  return (
+    <div className="max-w-md mx-auto bg-gray-50 h-screen flex flex-col">
+      <header className="bg-white px-4 py-3 flex items-center justify-between border-b border-gray-100 shadow-sm z-10">
+        <div className="flex items-center space-x-3">
+          <Link to="/messages" className="p-2 -ml-2 text-gray-500 hover:bg-gray-50 rounded-full transition-colors">
+            <ArrowLeft size={20} />
+          </Link>
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold overflow-hidden">
+              {receiverLogo ? (
+                 <img src={receiverLogo} alt="receiver logo" className="w-full h-full object-cover" />
+              ) : (
+                 receiverInitial || '?'
+              )}
+            </div>
+            <div>
+              <h1 className="font-bold text-gray-900 leading-tight">{receiverName || 'Loading...'}</h1>
+              <p className="text-xs text-green-500 font-medium">Online</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="text-center my-4">
+          <span className="text-xs font-medium text-gray-400 bg-gray-100 px-3 py-1 rounded-full uppercase tracking-wider">Today</span>
+        </div>
+        
+        {messages.length === 0 && (
+          <div className="text-center py-10 text-gray-400 text-sm">
+            <p>No messages yet. Say hi! 👋</p>
+          </div>
+        )}
+
+        {messages.map((msg, idx) => {
+          const isMe = msg.senderId === currentUserId;
+          return (
+            <div key={msg.id || idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
+                isMe 
+                  ? 'bg-indigo-600 text-white rounded-tr-sm' 
+                  : 'bg-white text-gray-800 border border-gray-100 shadow-sm rounded-tl-sm'
+              }`}>
+                {msg.imageUrl && (
+                   <div className="mb-2 rounded-lg overflow-hidden border border-white/20">
+                      <img src={msg.imageUrl} alt="attachment" className="w-full max-h-48 object-cover" loading="lazy" />
+                   </div>
+                )}
+                {msg.message && <p>{msg.message}</p>}
+                <p className={`text-[10px] mt-1 text-right ${isMe ? 'text-indigo-200' : 'text-gray-400'}`}>
+                  {msg.createdAt ? new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={messagesEndRef} />
+      </main>
+
+      <footer className="bg-white p-4 border-t border-gray-100 pb-safe relative">
+        {imagePreview && (
+          <div className="absolute bottom-full left-0 right-0 bg-white p-3 border-t border-gray-100 flex items-center shadow-lg rounded-t-xl z-20">
+             <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
+               <img src={imagePreview} className="w-full h-full object-cover" />
+               <button onClick={() => {setImagePreview(''); setImageFile(null);}} className="absolute top-1 right-1 bg-black/60 rounded-full p-0.5 hover:bg-black/80 transition-colors" type="button">
+                 <X size={12} className="text-white"/>
+               </button>
+             </div>
+          </div>
+        )}
+        <form onSubmit={handleSend} className="flex items-center space-x-2">
+          <label className="p-2 text-gray-400 hover:bg-gray-50 rounded-full cursor-pointer transition-colors relative">
+            <Paperclip size={24} />
+            <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+          </label>
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder="Type a message..."
+            className="flex-1 bg-gray-100 border-transparent rounded-full px-4 py-3 focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all outline-none text-sm"
+          />
+          <button 
+            type="submit"
+            disabled={(!newMessage.trim() && !imageFile) || isSending}
+            className="w-12 h-12 bg-indigo-600 text-white rounded-full flex items-center justify-center hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 shadow-sm"
+          >
+            {isSending ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} className="ml-1" />}
+          </button>
+        </form>
+      </footer>
+    </div>
+  );
+}

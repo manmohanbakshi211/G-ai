@@ -1,0 +1,5 @@
+{
+  "name": "Local Retail Discovery Platform",
+  "description": "Discover products available in nearby offline retail stores and connect with retailers through search, product posts, and real-time chat.",
+  "requestFramePermissions": ["geolocation"]
+}

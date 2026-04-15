@@ -1,0 +1,240 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id         String   @id @default(uuid())
+  name       String
+  email      String?  @unique
+  phone      String?  @unique
+  password   String
+  role       String   // customer, retailer, supplier, brand, manufacturer, admin
+  location   String?
+  createdAt  DateTime @default(now())
+
+  // KYC Verification
+  kycStatus       String   @default("none") // none, pending, approved, rejected
+  kycDocumentUrl  String?  // uploaded ID document image
+  kycSelfieUrl    String?  // uploaded selfie for verification
+  kycNotes        String?  // admin rejection reason
+  kycStoreName    String?  // Intended store name when submitting KYC
+  kycStorePhoto   String?  // Intended store photo when submitting KYC
+  isBlocked       Boolean  @default(false)
+  kycSubmittedAt  DateTime?
+  kycReviewedAt   DateTime?
+
+  stores     Store[]
+  messagesSent     Message[] @relation("SentMessages")
+  messagesReceived Message[] @relation("ReceivedMessages")
+  following        Follow[]
+  reviews          Review[]
+  notifications    Notification[]
+  savedItems       SavedItem[]
+  likes            Like[]
+  searchHistory    SearchHistory[]
+  savedLocations   SavedLocation[]
+  reportsMade      Report[] @relation("ReportsMade")
+  reportsReceived  Report[] @relation("ReportsReceived")
+}
+
+model Store {
+  id            String    @id @default(uuid())
+  ownerId       String
+  owner         User      @relation(fields: [ownerId], references: [id])
+  storeName     String
+  category      String
+  description   String?
+  latitude      Float
+  longitude     Float
+  address       String
+  phone         String?
+  openingHours  String?
+  openingTime   String?
+  closingTime   String?
+  workingDays   String?
+  gstNumber     String?
+  gstOrBillUrl  String?
+  selfieUrl     String?
+  createdAt     DateTime  @default(now())
+  products      Product[]
+  posts         Post[]
+  followers     Follow[]
+  reviews       Review[]
+  averageRating Float?
+  reviewCount   Int       @default(0)
+  phoneVisible  Boolean   @default(true)
+  hideRatings   Boolean   @default(false)
+  chatEnabled   Boolean   @default(true)
+  is24Hours     Boolean   @default(false)
+  logoUrl       String?
+  postalCode    Int?
+  city          String?
+  state         String?
+  manualProductText String?
+  teamMembers   TeamMember[]
+  reportsAgainst Report[] @relation("ReportedStores")
+}
+
+model Follow {
+  id        String   @id @default(uuid())
+  userId    String
+  storeId   String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+  store     Store    @relation(fields: [storeId], references: [id])
+
+  @@unique([userId, storeId])
+}
+
+model Product {
+  id              String   @id @default(uuid())
+  storeId         String
+  store           Store    @relation(fields: [storeId], references: [id])
+  productName     String
+  brand           String?
+  category        String
+  price           Float
+  description     String?
+  tags            String?  // Comma separated
+  embeddingVector String?  // JSON string for future AI search
+  createdAt       DateTime @default(now())
+  posts           Post[]
+  reviews         Review[]
+  averageRating   Float?
+  reviewCount     Int      @default(0)
+}
+
+model Post {
+  id         String   @id @default(uuid())
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id])
+  productId  String?
+  product    Product? @relation(fields: [productId], references: [id])
+  imageUrl   String
+  caption    String?
+  price      Float?
+  isPromoted Boolean  @default(false)
+  isPinned   Boolean  @default(false)
+  isOpeningPost Boolean @default(false)
+  createdAt  DateTime @default(now())
+  expiryDate DateTime? // Set to 30 days from creation by default unless promoted
+  likes      Like[]
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id])
+  receiverId String
+  receiver   User     @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  message    String
+  imageUrl   String?
+  createdAt  DateTime @default(now())
+}
+
+model Category {
+  id             String   @id @default(uuid())
+  categoryName   String
+  parentCategory String?
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  rating    Int      // 1-5 scale
+  comment   String?
+  createdAt DateTime @default(now())
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  storeId   String?
+  store     Store?   @relation(fields: [storeId], references: [id])
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+
+  // A review must belong to either a store OR a product, enforced via logic
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  type        String   // e.g., 'NEW_POST', 'REVIEW_RECEIVED', 'SYSTEM'
+  content     String
+  isRead      Boolean  @default(false)
+  referenceId String?  // Optional ID to a post, store, or review to deep link
+  createdAt   DateTime @default(now())
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model SavedItem {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  type        String   // 'post' or 'store'
+  referenceId String   // ID of the post or store
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, type, referenceId])
+}
+
+model SearchHistory {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  query     String
+  createdAt DateTime @default(now())
+}
+
+model SavedLocation {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  locationName String
+  latitude     Float
+  longitude    Float
+  createdAt    DateTime @default(now())
+}
+
+model TeamMember {
+  id             String   @id @default(uuid())
+  storeId        String
+  store          Store    @relation(fields: [storeId], references: [id])
+  phone          String   @unique
+  passwordHash   String
+  name           String   @default("Team Member")
+  role           String   @default("member") // 'owner' or 'member'
+  createdAt      DateTime @default(now())
+}
+
+model Report {
+  id                String   @id @default(uuid())
+  reportedUserId    String?
+  reportedUser      User?    @relation("ReportsReceived", fields: [reportedUserId], references: [id])
+  reportedStoreId   String?
+  reportedStore     Store?   @relation("ReportedStores", fields: [reportedStoreId], references: [id])
+  reportedByUserId  String
+  reportedByUser    User     @relation("ReportsMade", fields: [reportedByUserId], references: [id])
+  reason            String
+  createdAt         DateTime @default(now())
+
+  @@unique([reportedByUserId, reportedUserId, reportedStoreId]) // Prevent spamming reports
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+}

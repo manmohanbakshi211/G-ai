@@ -1,42 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { MapPin, Phone, Clock, Calendar, MessageCircle, ArrowLeft, Grid, Plus, Settings, LogOut, ChevronRight, History, Star, AlertTriangle, HelpCircle, Bookmark, UserCheck, Pin, X, Image as ImageIcon, Trash2, DollarSign, Navigation, ExternalLink, Store, Heart, Share2, Package } from 'lucide-react';
+import { MapPin, Phone, Clock, Calendar, MessageCircle, ArrowLeft, Grid, Plus, Settings, LogOut, ChevronRight, History, Star, AlertTriangle, HelpCircle, Bookmark, UserCheck, Pin, X, Image as ImageIcon, Trash2, DollarSign, Navigation, ExternalLink, Store, Heart, Share2, Package, Pencil } from 'lucide-react';
 import NotificationBell from '../components/NotificationBell';
 import ImageCropper from '../components/ImageCropper';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import KYCForm from '../components/KYCForm';
 import StarRating from '../components/StarRating';
-
-// Helper: determine open/closed status from store times
-function getStoreStatus(openingTime?: string, closingTime?: string, is24Hours?: boolean, workingDays?: string) {
-  // Check working days first
-  if (workingDays) {
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const today = dayNames[new Date().getDay()];
-    if (!workingDays.includes(today)) {
-      return { isOpen: false, label: 'Closed Today' };
-    }
-  }
-  if (is24Hours) return { isOpen: true, label: 'Open 24 Hours' };
-  if (!openingTime || !closingTime) return null;
-  const now = new Date();
-  const [openH, openM] = openingTime.split(':').map(Number);
-  const [closeH, closeM] = closingTime.split(':').map(Number);
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const openMinutes = openH * 60 + openM;
-  const closeMinutes = closeH * 60 + closeM;
-  const isOpen = closeMinutes > openMinutes
-    ? nowMinutes >= openMinutes && nowMinutes < closeMinutes
-    : nowMinutes >= openMinutes || nowMinutes < closeMinutes;
-  const formatTime = (h: number, m: number) => {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const hr = h % 12 || 12;
-    return `${hr}:${String(m).padStart(2, '0')} ${ampm}`;
-  };
-  if (isOpen) return { isOpen: true, label: `Open · Closes at ${formatTime(closeH, closeM)}` };
-  return { isOpen: false, label: `Closed · Opens tomorrow at ${formatTime(openH, openM)}` };
-}
+import { getStoreStatus } from '../lib/storeUtils';
+import { useToast } from '../context/ToastContext';
 
 export default function ProfilePage() {
   const [store, setStore] = useState<any>(null);
@@ -55,8 +27,20 @@ export default function ProfilePage() {
   const [rawImageUrl, setRawImageUrl] = useState('');
   const [chatCount, setChatCount] = useState(0);
   const [newPostPrice, setNewPostPrice] = useState('');
-  const { user, logout } = useAuth();
+  // Edit post state
+  const [editingPost, setEditingPost] = useState<any>(null);
+  const [editCaption, setEditCaption] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [editImage, setEditImage] = useState('');
+  const [editUploading, setEditUploading] = useState(false);
+  const [editShowCropper, setEditShowCropper] = useState(false);
+  const [editRawImageUrl, setEditRawImageUrl] = useState('');
+  const [kycStatus, setKycStatus] = useState<'none' | 'pending' | 'approved' | 'rejected'>('none');
+  const [kycNotes, setKycNotes] = useState('');
+  const [kycStoreName, setKycStoreName] = useState('');
+  const { user, token, logout } = useAuth();
   const navigate = useNavigate();
+  const { showToast, showConfirm } = useToast();
 
   const currentUserId = user?.id;
 
@@ -66,23 +50,23 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (user) {
-      fetch(`/api/me/interactions`, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } })
-        .then(res => res.json())
-        .then(data => setInteractions(data))
-        .catch(console.error);
+      fetch(`/api/me/interactions`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(res => res.ok ? res.json() : null)
+        .then(data => { if (data) setInteractions(data); })
+        .catch(() => {});
     }
   }, [user]);
 
   const toggleLike = async (postId: string) => {
     const isLiked = interactions.likedPostIds.includes(postId);
     setInteractions(prev => ({ ...prev, likedPostIds: isLiked ? prev.likedPostIds.filter(id => id !== postId) : [...prev.likedPostIds, postId] }));
-    try { await fetch(`/api/posts/${postId}/like`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }); } catch (e) { console.error(e); }
+    try { await fetch(`/api/posts/${postId}/like`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }); } catch (e) { console.error(e); }
   };
 
   const toggleSave = async (postId: string) => {
     const isSaved = interactions.savedPostIds.includes(postId);
     setInteractions(prev => ({ ...prev, savedPostIds: isSaved ? prev.savedPostIds.filter(id => id !== postId) : [...prev.savedPostIds, postId] }));
-    try { await fetch(`/api/posts/${postId}/save`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }); } catch (e) { console.error(e); }
+    try { await fetch(`/api/posts/${postId}/save`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } }); } catch (e) { console.error(e); }
   };
 
   const handleShare = async (post: any) => {
@@ -93,17 +77,17 @@ export default function ProfilePage() {
     };
     try {
       if (navigator.share) await navigator.share(shareData);
-      else { await navigator.clipboard.writeText(shareData.url); alert('Link copied to clipboard!'); }
+      else { await navigator.clipboard.writeText(shareData.url); showToast('Link copied to clipboard!', { type: 'success' }); }
     } catch (e) {}
   };
 
   const getLikeCount = (post: any) => {
-    const baseCount = post.likes?.length || 0;
-    const initiallyLiked = post.likes?.some((l: any) => l.userId === user?.id);
+    const total = post._count?.likes ?? post.likes?.length ?? 0;
+    const initiallyLiked = (post.likes?.length ?? 0) > 0;
     const currentlyLiked = interactions.likedPostIds.includes(post.id);
-    if (initiallyLiked && !currentlyLiked) return Math.max(0, baseCount - 1);
-    if (!initiallyLiked && currentlyLiked) return baseCount + 1;
-    return baseCount;
+    if (initiallyLiked && !currentlyLiked) return Math.max(0, total - 1);
+    if (!initiallyLiked && currentlyLiked) return total + 1;
+    return total;
   };
 
   useEffect(() => {
@@ -113,9 +97,24 @@ export default function ProfilePage() {
 
   const fetchStoreData = async () => {
     try {
+      // For business users, always check KYC status first
+      if (user?.role && user.role !== 'customer') {
+        try {
+          const kycRes = await fetch('/api/kyc/status', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (kycRes.ok) {
+            const kycData = await kycRes.json();
+            setKycStatus(kycData.kycStatus || 'none');
+            setKycNotes(kycData.kycNotes || '');
+            setKycStoreName(kycData.kycStoreName || '');
+          }
+        } catch {}
+      }
+
       const storeRes = await fetch(`/api/users/${currentUserId}/store`);
       let storeData = await storeRes.json();
-      
+
       if (!storeData && user?.role === 'retailer') {
         storeData = {
           id: 'mock-store',
@@ -138,27 +137,25 @@ export default function ProfilePage() {
         const postsRes = await fetch(`/api/stores/${storeData.id}/posts`);
         if (postsRes.ok) {
           const postsData = await postsRes.json();
-          setPosts(postsData);
+          setPosts(Array.isArray(postsData) ? postsData : (postsData.posts ?? []));
         }
 
         const reviewsRes = await fetch(`/api/reviews/store/${storeData.id}`);
         if (reviewsRes.ok) {
           const revData = await reviewsRes.json();
-          setReviews(revData);
+          setReviews(Array.isArray(revData) ? revData : (revData.reviews ?? []));
         }
       } else {
         setStore(null);
       }
       setLoading(false);
-    } catch (err) {
-      console.error(err);
+    } catch {
       setLoading(false);
     }
   };
 
   const fetchChatCount = async () => {
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch('/api/conversations', { headers: { Authorization: `Bearer ${token}` } });
       if (res.ok) {
         const convos = await res.json();
@@ -174,16 +171,63 @@ export default function ProfilePage() {
   const confirmDeletePost = async () => {
     if (!postToDelete) return;
     try {
-      const res = await fetch(`/api/posts/${postToDelete}`, { method: 'DELETE', headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }});
+      const res = await fetch(`/api/posts/${postToDelete}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` }});
       if (!res.ok) throw new Error('Failed to delete post');
       setPosts(posts.filter(p => p.id !== postToDelete));
       if (selectedPost?.id === postToDelete) setSelectedPost(null);
     } catch (e) {
-      console.error("Failed to delete post", e);
-      alert("Failed to delete post");
+      showToast('Failed to delete post', { type: 'error' });
     } finally {
       setPostToDelete(null);
     }
+  };
+
+  const openEditModal = (post: any) => {
+    setEditingPost(post);
+    setEditCaption(post.caption || '');
+    setEditPrice(post.price ? String(post.price) : (post.product?.price ? String(post.product.price) : ''));
+    setEditImage(post.imageUrl || '');
+    setEditShowCropper(false);
+    setEditRawImageUrl('');
+  };
+
+  const handleEditImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
+      if (res.ok) {
+        const data = await res.json();
+        setEditRawImageUrl(data.url);
+        setEditShowCropper(true);
+      }
+    } catch {}
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingPost) return;
+    setEditUploading(true);
+    try {
+      const res = await fetch(`/api/posts/${editingPost.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ caption: editCaption, imageUrl: editImage, price: editPrice || null })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
+        if (selectedPost?.id === updated.id) setSelectedPost(updated);
+        setEditingPost(null);
+        showToast('Post updated', { type: 'success' });
+      } else {
+        showToast('Failed to update post', { type: 'error' });
+      }
+    } catch {
+      showToast('Failed to update post', { type: 'error' });
+    }
+    setEditUploading(false);
   };
 
   useEffect(() => {
@@ -197,13 +241,13 @@ export default function ProfilePage() {
   const handleTogglePin = async (e: React.MouseEvent, postId: string) => {
     e.stopPropagation();
     try {
-      const res = await fetch(`/api/posts/${postId}/pin`, { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }});
+      const res = await fetch(`/api/posts/${postId}/pin`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }});
       if (res.ok) {
         const updated = await res.json();
         setPosts(posts.map(p => p.id === postId ? updated : p));
       } else {
         const err = await res.json();
-        alert(err.error || "Maximum 3 pinned posts allowed.");
+        showToast(err.error || 'Maximum 3 pinned posts allowed.', { type: 'error' });
       }
     } catch (err) {
       console.error("Pin failed", err);
@@ -212,18 +256,18 @@ export default function ProfilePage() {
 
   const handleCreatePost = async () => {
     if (!store || store.id === 'mock-store') {
-      alert('Please set up your store in Edit Profile first.');
+      showToast('Please set up your store first.', { type: 'warning' });
       return;
     }
     if (!newPostImage) {
-      alert('Please upload an image for the post.');
+      showToast('Please upload an image for the post.', { type: 'warning' });
       return;
     }
     setNewPostUploading(true);
     try {
       const res = await fetch('/api/posts', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ storeId: store.id, caption: newPostCaption, imageUrl: newPostImage, ...(newPostPrice ? { price: parseFloat(newPostPrice) } : {}) })
       });
       if (res.ok) {
@@ -234,7 +278,7 @@ export default function ProfilePage() {
         setNewPostImage('');
         setNewPostPrice('');
       } else {
-        alert('Failed to create post.');
+        showToast('Failed to create post.', { type: 'error' });
       }
     } catch (e) {
       console.error(e);
@@ -250,7 +294,7 @@ export default function ProfilePage() {
     try {
       const res = await fetch('/api/upload', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        headers: { Authorization: `Bearer ${token}` },
         body: formData
       });
       if (res.ok) {
@@ -263,12 +307,16 @@ export default function ProfilePage() {
     }
   };
 
-  // Filter recent posts (last 30 days) and sort pinned first
+  // Filter: opening post and pinned posts are exempt from 30-day removal
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  // Pinned posts are exempt from 30-day auto-removal
-  const recentPosts = posts.filter(p => p.isPinned || new Date(p.createdAt || new Date()) >= thirtyDaysAgo);
+  const recentPosts = posts.filter(p =>
+    p.isOpeningPost || p.isPinned || new Date(p.createdAt || new Date()) >= thirtyDaysAgo
+  );
+  // Order: opening post (store photo) → pinned → regular (newest first)
   const sortedPosts = [...recentPosts].sort((a, b) => {
+    if (a.isOpeningPost && !b.isOpeningPost) return -1;
+    if (!a.isOpeningPost && b.isOpeningPost) return 1;
     if (a.isPinned && !b.isPinned) return -1;
     if (!a.isPinned && b.isPinned) return 1;
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -367,32 +415,120 @@ export default function ProfilePage() {
   // NO STORE SETUP YET
   // ========================
   if (!store || store.id === 'mock-store') {
+    // KYC form open
     if (showKYC) {
       return (
-        <KYCForm 
+        <KYCForm
           onComplete={() => {
             fetchStoreData();
             navigate('/retailer/dashboard');
-          }} 
-          onLogout={handleLogout} 
-          onBack={() => setShowKYC(false)} 
+          }}
+          onLogout={handleLogout}
+          onBack={() => setShowKYC(false)}
         />
       );
     }
-    
+
+    // KYC pending approval
+    if (kycStatus === 'pending') {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 relative overflow-hidden">
+          <div className="absolute top-0 -left-6 w-80 h-80 bg-amber-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob"></div>
+          <div className="absolute top-0 -right-4 w-72 h-72 bg-orange-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-2000"></div>
+          <div className="absolute -bottom-8 left-20 w-80 h-80 bg-yellow-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-4000"></div>
+          <div className="w-full max-w-md px-6 py-12 relative z-10 text-center">
+            <div className="w-24 h-24 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl shadow-amber-100 border border-white/40">
+              <Clock size={40} className="text-amber-500" />
+            </div>
+            <h2 className="text-3xl font-bold text-gray-900 mb-3">Application Under Review</h2>
+            {kycStoreName && <p className="text-indigo-600 font-semibold mb-2">{kycStoreName}</p>}
+            <p className="text-gray-500 mb-6 text-sm px-4">Your KYC application has been submitted and is currently being reviewed by our team. We'll notify you once it's approved — this usually takes 1–2 business days.</p>
+            <div className="bg-amber-50 border border-amber-100 rounded-2xl px-5 py-4 mb-8 text-left">
+              <p className="text-xs font-semibold text-amber-700 uppercase tracking-wider mb-1">Status</p>
+              <p className="text-sm text-amber-800 font-medium">Pending Approval</p>
+            </div>
+            <button onClick={handleLogout} className="text-gray-500 font-semibold flex items-center mx-auto hover:text-gray-800 transition-colors">
+              <LogOut size={18} className="mr-2" /> Log Out
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // KYC approved but store not yet created — prompt to complete profile
+    if (kycStatus === 'approved') {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 relative overflow-hidden">
+          <div className="absolute top-0 -left-6 w-80 h-80 bg-green-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob"></div>
+          <div className="absolute top-0 -right-4 w-72 h-72 bg-emerald-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-2000"></div>
+          <div className="absolute -bottom-8 left-20 w-80 h-80 bg-teal-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-4000"></div>
+          <div className="w-full max-w-md px-6 py-12 relative z-10 text-center">
+            <div className="w-24 h-24 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl shadow-green-100 border border-white/40">
+              <Store size={40} className="text-emerald-600" />
+            </div>
+            <h2 className="text-3xl font-bold text-gray-900 mb-3">KYC Approved!</h2>
+            <p className="text-gray-500 mb-8 text-sm px-4">Your business has been verified. Now complete your store profile to go live on the platform.</p>
+            <button
+              onClick={() => navigate('/retailer/dashboard')}
+              className="w-full bg-emerald-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 active:scale-[0.98] transition-all mb-3"
+            >
+              Complete Your Store Profile
+            </button>
+            <button onClick={handleLogout} className="mt-3 text-gray-500 font-semibold flex items-center mx-auto hover:text-gray-800 transition-colors">
+              <LogOut size={18} className="mr-2" /> Log Out
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // KYC rejected — show reason and allow resubmission
+    if (kycStatus === 'rejected') {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 relative overflow-hidden">
+          <div className="absolute top-0 -left-6 w-80 h-80 bg-red-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob"></div>
+          <div className="absolute top-0 -right-4 w-72 h-72 bg-rose-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-2000"></div>
+          <div className="absolute -bottom-8 left-20 w-80 h-80 bg-pink-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-4000"></div>
+          <div className="w-full max-w-md px-6 py-12 relative z-10 text-center">
+            <div className="w-24 h-24 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl shadow-red-100 border border-white/40">
+              <AlertTriangle size={40} className="text-red-500" />
+            </div>
+            <h2 className="text-3xl font-bold text-gray-900 mb-3">Application Rejected</h2>
+            <p className="text-gray-500 mb-4 text-sm px-4">Unfortunately your KYC application was not approved. Please review the reason below and resubmit.</p>
+            {kycNotes && (
+              <div className="bg-red-50 border border-red-100 rounded-2xl px-5 py-4 mb-8 text-left">
+                <p className="text-xs font-semibold text-red-700 uppercase tracking-wider mb-1">Reason</p>
+                <p className="text-sm text-red-800">{kycNotes}</p>
+              </div>
+            )}
+            <button
+              onClick={() => setShowKYC(true)}
+              className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-[0.98] transition-all mb-3"
+            >
+              Resubmit KYC Application
+            </button>
+            <button onClick={handleLogout} className="mt-3 text-gray-500 font-semibold flex items-center mx-auto hover:text-gray-800 transition-colors">
+              <LogOut size={18} className="mr-2" /> Log Out
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // kycStatus === 'none' — not submitted yet
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 relative overflow-hidden">
         <div className="absolute top-0 -left-6 w-80 h-80 bg-indigo-300 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob"></div>
         <div className="absolute top-0 -right-4 w-72 h-72 bg-purple-300 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-2000"></div>
         <div className="absolute -bottom-8 left-20 w-80 h-80 bg-blue-300 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-blob animation-delay-4000"></div>
-        
+
         <div className="w-full max-w-md px-6 py-12 relative z-10 text-center">
             <div className="w-24 h-24 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl shadow-indigo-100 border border-white/40">
                <Store size={40} className="text-indigo-600" />
             </div>
             <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 mb-3">Business Profile Not Setup</h2>
             <p className="text-gray-500 mb-10 text-center text-sm px-4">You need to complete the Initial KYC to verify your business and open your digital storefront.</p>
-            <button 
+            <button
                onClick={() => setShowKYC(true)}
                className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-[0.98] transition-all"
             >
@@ -462,7 +598,7 @@ export default function ProfilePage() {
                 </span>
               )}
             </h2>
-            {store && !store.hideRatings && typeof store.averageRating === 'number' && (
+            {store && !store.hideRatings && (
               <div className="flex items-center space-x-2 my-1">
                 <StarRating rating={store.averageRating || 0} size={14} />
                 <span className="text-xs font-medium text-gray-500">
@@ -606,22 +742,28 @@ export default function ProfilePage() {
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                     />
-                    {/* PIN / UNPIN CONTROL (visible on hover or if pinned) */}
-                    <button 
-                       onClick={(e) => handleTogglePin(e, post.id)} 
-                       title={post.isPinned ? 'Unpin post' : 'Pin post (max 3)'}
-                       className={`absolute top-1.5 right-1.5 p-1.5 rounded-full transition-all shadow-sm z-10 ${
-                         post.isPinned 
-                           ? 'bg-indigo-600 text-white' 
-                           : 'bg-black/40 text-white opacity-0 group-hover:opacity-100 hover:bg-black/60'
-                       }`}
-                    >
-                       <Pin size={12} fill={post.isPinned ? 'white' : 'transparent'} />
-                    </button>
+                    {/* Opening post badge */}
+                    {post.isOpeningPost && (
+                      <div className="absolute top-1.5 left-1.5 bg-black/60 text-white text-[8px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide z-10">Store</div>
+                    )}
+                    {/* PIN / UNPIN CONTROL (hidden for opening post) */}
+                    {!post.isOpeningPost && (
+                      <button
+                         onClick={(e) => handleTogglePin(e, post.id)}
+                         title={post.isPinned ? 'Unpin post' : 'Pin post (max 3)'}
+                         className={`absolute top-1.5 right-1.5 p-1.5 rounded-full transition-all shadow-sm z-10 ${
+                           post.isPinned
+                             ? 'bg-indigo-600 text-white'
+                             : 'bg-black/40 text-white opacity-0 group-hover:opacity-100 hover:bg-black/60'
+                         }`}
+                      >
+                         <Pin size={12} fill={post.isPinned ? 'white' : 'transparent'} />
+                      </button>
+                    )}
                     {/* Price overlay */}
                     {post.product && (
                       <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
-                        ${post.product.price}
+                        ₹{Number(post.product.price).toLocaleString()}
                       </div>
                     )}
                   </div>
@@ -715,19 +857,29 @@ export default function ProfilePage() {
                        </div>
                      </div>
                      <div className="flex items-center space-x-2">
-                        <button 
-                          onClick={(e) => handleTogglePin(e, post.id)} 
-                          className={`text-[11px] font-bold py-1.5 px-3 rounded-full flex items-center transition-colors ${
-                            post.isPinned 
-                              ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200' 
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
+                        <button
+                          onClick={() => openEditModal(post)}
+                          className="text-indigo-600 font-bold text-[11px] py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 transition-colors rounded-full flex items-center"
                         >
-                          <Pin size={12} className="mr-1" fill={post.isPinned ? "currentColor" : "none"} /> {post.isPinned ? 'Unpin' : 'Pin'}
+                          <Pencil size={12} className="mr-1" /> Edit
                         </button>
-                        <button onClick={() => handleDeletePost(post.id)} className="text-red-600 font-bold text-[11px] py-1.5 px-3 bg-red-50 hover:bg-red-100 transition-colors rounded-full flex items-center">
-                           <Trash2 size={12} className="mr-1" /> Delete
-                        </button>
+                        {!post.isOpeningPost && (
+                          <button
+                            onClick={(e) => handleTogglePin(e, post.id)}
+                            className={`text-[11px] font-bold py-1.5 px-3 rounded-full flex items-center transition-colors ${
+                              post.isPinned
+                                ? 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            <Pin size={12} className="mr-1" fill={post.isPinned ? "currentColor" : "none"} /> {post.isPinned ? 'Unpin' : 'Pin'}
+                          </button>
+                        )}
+                        {!post.isOpeningPost && (
+                          <button onClick={() => handleDeletePost(post.id)} className="text-red-600 font-bold text-[11px] py-1.5 px-3 bg-red-50 hover:bg-red-100 transition-colors rounded-full flex items-center">
+                            <Trash2 size={12} className="mr-1" /> Delete
+                          </button>
+                        )}
                      </div>
                   </div>
                   
@@ -747,12 +899,11 @@ export default function ProfilePage() {
                             <Heart size={24} className={`transition-colors ${isLiked ? 'fill-red-500 text-red-500' : 'text-gray-900 group-hover:text-red-500'}`} />
                             <span className="ml-1.5 font-semibold text-sm text-gray-700">{likeCount}</span>
                          </button>
-                         <button className="text-gray-900 hover:text-indigo-500 transition-colors"><MessageCircle size={24} /></button>
                          <button onClick={() => handleShare(post)} className="text-gray-900 hover:text-indigo-500 transition-colors"><Share2 size={24} /></button>
                       </div>
                       <div className="flex items-center space-x-4">
                         {post.product && (
-                          <span className="font-bold text-lg text-gray-900">${post.product.price.toFixed(2)}</span>
+                          <span className="font-bold text-lg text-gray-900">₹{Number(post.product.price).toLocaleString()}</span>
                         )}
                         {!post.product && post.price && (
                           <span className="font-bold text-lg text-gray-900">₹{post.price}</span>
@@ -809,7 +960,7 @@ export default function ProfilePage() {
                       formData.append('file', blob, 'cropped-post.jpg');
                       const res = await fetch('/api/upload', {
                         method: 'POST',
-                        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+                        headers: { Authorization: `Bearer ${token}` },
                         body: formData
                       });
                       if (res.ok) {
@@ -877,6 +1028,79 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+      {/* EDIT POST MODAL */}
+      {editingPost && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center">
+          <div className="bg-white w-full max-w-md rounded-t-2xl p-5 animate-slide-up max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-lg font-bold text-gray-900">Edit Post</h3>
+              <button onClick={() => setEditingPost(null)}><X size={24} className="text-gray-400" /></button>
+            </div>
+
+            {/* Image */}
+            <div className="mb-4">
+              {editShowCropper && editRawImageUrl ? (
+                <ImageCropper
+                  imageUrl={editRawImageUrl}
+                  onComplete={async (croppedDataUrl) => {
+                    try {
+                      const blob = await fetch(croppedDataUrl).then(r => r.blob());
+                      const formData = new FormData();
+                      formData.append('file', blob, 'edited-post.jpg');
+                      const res = await fetch('/api/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
+                      if (res.ok) { const data = await res.json(); setEditImage(data.url); }
+                    } catch {}
+                    setEditShowCropper(false);
+                    setEditRawImageUrl('');
+                  }}
+                  onCancel={() => { setEditShowCropper(false); setEditRawImageUrl(''); }}
+                />
+              ) : (
+                <div className="relative">
+                  <img src={editImage} alt="Post" className="w-full aspect-[3/4] object-cover rounded-xl" />
+                  <label className="absolute bottom-2 right-2 bg-black/60 text-white px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1 cursor-pointer hover:bg-black/80 transition-colors">
+                    <Pencil size={12} /> Replace Photo
+                    <input type="file" accept="image/*" className="hidden" onChange={handleEditImageUpload} />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* Caption */}
+            <textarea
+              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all"
+              rows={3}
+              placeholder="Write a caption..."
+              value={editCaption}
+              onChange={(e) => setEditCaption(e.target.value)}
+            />
+
+            {/* Price */}
+            <div className="mt-3">
+              <label className="block text-xs text-gray-500 font-medium mb-1">Price (optional)</label>
+              <div className="relative">
+                <DollarSign size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  className="w-full pl-9 pr-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all"
+                  placeholder="e.g. 299"
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveEdit}
+              disabled={editUploading || !editImage}
+              className="w-full mt-4 bg-indigo-600 text-white py-3 rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-indigo-700 transition-colors"
+            >
+              {editUploading ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* POST DELETE CONFIRMATION MODAL */}
       {postToDelete && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-6" onClick={() => setPostToDelete(null)}>

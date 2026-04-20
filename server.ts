@@ -4,28 +4,145 @@ import { PrismaClient } from "@prisma/client";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import multer from "multer";
+import multerS3 from "multer-s3";
+import { S3Client } from "@aws-sdk/client-s3";
 import * as xlsx from "xlsx";
 import path from "path";
 import fs from "fs";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import cors from "cors";
+import rateLimit from "express-rate-limit";
+import { RedisStore } from "rate-limit-redis";
+import compression from "compression";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createClient } from "redis";
+import { Queue, Worker } from "bullmq";
+import IORedis from "ioredis";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-jwt-key-change-this";
 if (JWT_SECRET === "your-super-secret-jwt-key-change-this") {
   console.warn("WARNING: Using default JWT_SECRET. Please set JWT_SECRET in .env for production.");
 }
 
-const prisma = new PrismaClient();
+// Prisma with connection pooling sized for high concurrency
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL,
+    },
+  },
+});
+
 const app = express();
 const httpServer = createServer(app);
+
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : ['http://localhost:5173', 'http://localhost:3000'];
+
 const io = new Server(httpServer, {
-  cors: { origin: "*" },
+  cors: { origin: ALLOWED_ORIGINS },
 });
+
+// Setup Redis & Socket.io adapter
+const pubClient = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
+const subClient = pubClient.duplicate();
+
+Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log("Redis adapter attached to Socket.IO");
+}).catch(err => console.error("Redis connection error:", err));
+
+// Setup BullMQ for background jobs (using IORedis connection)
+const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', { maxRetriesPerRequest: null });
+const notificationQueue = new Queue('Notifications', { connection });
+
+// Worker that processes heavy jobs in the background
+const notificationWorker = new Worker('Notifications', async job => {
+  if (job.name === 'publishPostNotifications') {
+    const { postId, storeId, storeName } = job.data;
+    const storeWithFollowers = await prisma.store.findUnique({
+      where: { id: storeId },
+      include: { followers: true }
+    });
+    if (storeWithFollowers && storeWithFollowers.followers.length > 0) {
+      // Chunk createMany in batches of 1000 to avoid DB statement size limits at scale
+      const allFollowers = storeWithFollowers.followers;
+      const CHUNK = 1000;
+      for (let i = 0; i < allFollowers.length; i += CHUNK) {
+        const chunk = allFollowers.slice(i, i + CHUNK);
+        await prisma.notification.createMany({
+          data: chunk.map(f => ({
+            userId: f.userId,
+            type: 'NEW_POST',
+            content: `${storeName} just published a new post!`,
+            referenceId: postId
+          }))
+        });
+      }
+
+      // Emit only to currently-connected users (socket rooms exist only if user is online)
+      const newNotifs = await prisma.notification.findMany({
+        where: { referenceId: postId, type: 'NEW_POST' }
+      });
+      for (const notif of newNotifs) {
+        io.to(notif.userId).emit('newNotification', notif);
+      }
+    }
+  }
+
+  if (job.name === 'autoReply') {
+    const { senderId, receiverId, storeName, senderName, storePhone, storeAddress } = job.data;
+    const autoReplyText = `Hi! Thanks for reaching out. Please wait while our team connects with you.`;
+    try {
+      const autoReply = await prisma.message.create({
+        data: { senderId: receiverId, receiverId: senderId, message: autoReplyText }
+      });
+      io.to(senderId).emit("newMessage", autoReply);
+      io.to(receiverId).emit("newMessage", autoReply);
+    } catch (e) {
+      console.error("Auto-reply job failed:", e);
+    }
+  }
+}, { connection });
+
+// Redis-backed cache for blocked user status (TTL 60s) — avoids a DB hit on every request
+const BLOCKED_TTL = 60;
+const isUserBlocked = async (userId: string): Promise<boolean> => {
+  const key = `blocked:${userId}`;
+  try {
+    const cached = await pubClient.get(key);
+    if (cached !== null) return cached === '1';
+  } catch {}
+  const row = await prisma.user.findUnique({ where: { id: userId }, select: { isBlocked: true } });
+  const blocked = row?.isBlocked ?? false;
+  try { await pubClient.set(key, blocked ? '1' : '0', { EX: BLOCKED_TTL }); } catch {}
+  return blocked;
+};
+
+// Redis-backed cache for team member existence (TTL 120s) — avoids a DB hit per request
+const TEAM_MEMBER_TTL = 120;
+const teamMemberExists = async (teamMemberId: string): Promise<boolean> => {
+  const key = `team:${teamMemberId}`;
+  try {
+    const cached = await pubClient.get(key);
+    if (cached !== null) return cached === '1';
+  } catch {}
+  const member = await prisma.teamMember.findUnique({ where: { id: teamMemberId }, select: { id: true } });
+  const exists = !!member;
+  try { await pubClient.set(key, exists ? '1' : '0', { EX: TEAM_MEMBER_TTL }); } catch {}
+  return exists;
+};
+
+// Gzip/brotli all responses — especially large JSON feeds
+app.use(compression());
 
 // CORS - must be before everything else
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
@@ -34,24 +151,96 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
-// Setup uploads directory
+// Rate Limiting — Redis-backed so limits survive restarts and work across multiple instances
+const makeRedisStore = (prefix: string) => new RedisStore({
+  sendCommand: (...args: string[]) => pubClient.sendCommand(args),
+  prefix,
+});
+
+const authLimiter = rateLimit({
+  store: makeRedisStore('rl:auth:'),
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: "Too many attempts. Please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const uploadLimiter = rateLimit({
+  store: makeRedisStore('rl:upload:'),
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: "Too many uploads. Please slow down." },
+});
+
+const messageLimiter = rateLimit({
+  store: makeRedisStore('rl:message:'),
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "You're sending messages too quickly. Please slow down." },
+});
+
+// Setup uploads directory with S3 option
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
-const upload = multer({ dest: uploadDir });
+
+let upload;
+if (process.env.S3_BUCKET_NAME) {
+  const s3 = new S3Client({
+    region: process.env.AWS_REGION || "us-east-1",
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+    }
+  });
+  upload = multer({
+    storage: multerS3({
+      s3: s3,
+      bucket: process.env.S3_BUCKET_NAME,
+      metadata: function (req, file, cb) {
+        cb(null, { fieldName: file.fieldname });
+      },
+      key: function (req, file, cb) {
+        cb(null, Date.now().toString() + "-" + file.originalname);
+      }
+    })
+  });
+} else {
+  upload = multer({
+    dest: uploadDir,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+    fileFilter: (req, file, cb) => {
+      const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel'];
+      if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+      } else {
+        cb(new Error('Invalid file type. Only images (JPEG, PNG, WebP, GIF) and Excel files are allowed.'));
+      }
+    }
+  });
+}
 
 app.use("/uploads", express.static(uploadDir)); // Serve upload images
 
 // API Routes
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+app.get("/api/health", async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    await pubClient.ping();
+    res.json({ status: "ok", db: "ok", redis: "ok" });
+  } catch (err: any) {
+    res.status(503).json({ status: "error", message: err.message });
+  }
 });
 
 // Users
-app.post("/api/users", async (req, res) => {
+app.post("/api/users", authLimiter, async (req, res) => {
   try {
     const { name, phone, password, role, location } = req.body;
 
@@ -85,7 +274,7 @@ app.post("/api/users", async (req, res) => {
   }
 });
 
-app.post("/api/login", async (req, res) => {
+app.post("/api/login", authLimiter, async (req, res) => {
   try {
     const { phone, password } = req.body;
 
@@ -135,7 +324,7 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-app.post("/api/google-login", async (req, res) => {
+app.post("/api/google-login", authLimiter, async (req, res) => {
   try {
     const { token, role } = req.body;
     
@@ -197,19 +386,17 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
   if (!token) return res.status(401).json({ error: "Access denied" });
 
   jwt.verify(token, JWT_SECRET, async (err: any, user: any) => {
-    if (err) return res.status(403).json({ error: "Invalid token" });
-    
-    // Check if team member exists still to instantly revoke access
+    if (err || !user || !user.userId) return res.status(403).json({ error: "Invalid token" });
+
+    // Check team member revocation via Redis cache
     if (user.teamMemberId) {
-       const member = await prisma.teamMember.findUnique({ where: { id: user.teamMemberId }});
-       if (!member) return res.status(403).json({ error: "Access revoked" });
+      if (!(await teamMemberExists(user.teamMemberId))) return res.status(403).json({ error: "Access revoked" });
     }
 
     (req as any).user = user;
-    
-    // Safety check: is user blocked? (optional: cache this to avoid DB hits on every request)
-    const dbUser = await prisma.user.findUnique({ where: { id: user.userId }, select: { isBlocked: true } });
-    if (dbUser?.isBlocked) return res.status(403).json({ error: "Account blocked" });
+
+    // Blocked check via Redis cache — single cache lookup instead of a DB query per request
+    if (await isUserBlocked(user.userId)) return res.status(403).json({ error: "Account blocked" });
 
     next();
   });
@@ -235,9 +422,15 @@ const requireAdmin = (req: any, res: express.Response, next: express.NextFunctio
   next();
 };
 
-// Enhanced stats
+const ADMIN_STATS_KEY = 'admin:stats';
+const ADMIN_STATS_TTL = 60;
+
+// Enhanced stats — cached in Redis for 60s to avoid 5 COUNT(*) queries per dashboard load
 app.get("/api/admin/stats", authenticateToken, requireAdmin, async (req, res) => {
   try {
+    const cached = await pubClient.get(ADMIN_STATS_KEY);
+    if (cached) return res.json(JSON.parse(cached as string));
+
     const [usersCount, storesCount, postsCount, reviewsCount, reportsCount] = await Promise.all([
       prisma.user.count(),
       prisma.store.count(),
@@ -246,23 +439,26 @@ app.get("/api/admin/stats", authenticateToken, requireAdmin, async (req, res) =>
       prisma.report.count(),
     ]);
 
-    const recentUsers = await prisma.user.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 5,
-      select: { id: true, name: true, role: true, phone: true, createdAt: true },
-    });
+    const [recentUsers, recentReports] = await Promise.all([
+      prisma.user.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        select: { id: true, name: true, role: true, phone: true, createdAt: true, kycStoreName: true, stores: { select: { storeName: true } } },
+      }),
+      prisma.report.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 5,
+        include: {
+          reportedByUser: { select: { name: true } },
+          reportedUser: { select: { name: true } },
+          reportedStore: { select: { storeName: true } },
+        },
+      }),
+    ]);
 
-    const recentReports = await prisma.report.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 5,
-      include: {
-        reportedByUser: { select: { name: true } },
-        reportedUser: { select: { name: true } },
-        reportedStore: { select: { storeName: true } },
-      },
-    });
-
-    res.json({ users: usersCount, stores: storesCount, posts: postsCount, reviews: reviewsCount, reports: reportsCount, recentUsers, recentReports });
+    const result = { users: usersCount, stores: storesCount, posts: postsCount, reviews: reviewsCount, reports: reportsCount, recentUsers, recentReports };
+    await pubClient.set(ADMIN_STATS_KEY, JSON.stringify(result), { EX: ADMIN_STATS_TTL });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch admin stats" });
   }
@@ -283,7 +479,7 @@ app.get("/api/admin/users", authenticateToken, requireAdmin, async (req, res) =>
         skip,
         take: parseInt(limit),
         orderBy: { createdAt: "desc" },
-        select: { id: true, name: true, phone: true, email: true, role: true, location: true, createdAt: true },
+        select: { id: true, name: true, phone: true, email: true, role: true, location: true, createdAt: true, isBlocked: true, kycStoreName: true, stores: { select: { id: true, storeName: true, logoUrl: true } } },
       }),
       prisma.user.count({ where }),
     ]);
@@ -294,9 +490,34 @@ app.get("/api/admin/users", authenticateToken, requireAdmin, async (req, res) =>
   }
 });
 
+// Admin: Reset user password
+app.post("/api/admin/reset-password", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { userId, newPassword } = req.body;
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashed },
+    });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
+const PROTECTED_ADMIN_ID = '5cbf1a3d-e8e7-4b64-836a-58475bbbb7d9';
+
 // Update user (role or blocked status)
 app.put("/api/admin/users/:id", authenticateToken, requireAdmin, async (req, res) => {
   try {
+    if (req.params.id === PROTECTED_ADMIN_ID) {
+      return res.status(403).json({ error: "This admin account cannot be modified" });
+    }
     const { role, isBlocked } = req.body;
     const updateData: any = {};
     if (role !== undefined) updateData.role = role;
@@ -320,9 +541,11 @@ app.post("/api/admin/users/bulk-update", authenticateToken, requireAdmin, async 
     if (!Array.isArray(userIds)) return res.status(400).json({ error: "userIds must be an array" });
 
     const currentUserId = (req as any).user.userId;
-    
-    // Filter out current user if trying to block
-    const safeUserIds = (isBlocked === true) ? userIds.filter((id: string) => id !== currentUserId) : userIds;
+
+    // Filter out current user and protected admin if trying to block
+    const safeUserIds = (isBlocked === true)
+      ? userIds.filter((id: string) => id !== currentUserId && id !== PROTECTED_ADMIN_ID)
+      : userIds.filter((id: string) => id !== PROTECTED_ADMIN_ID);
     
     if (safeUserIds.length === 0) {
       return res.json({ success: true, count: 0 });
@@ -342,6 +565,9 @@ app.post("/api/admin/users/bulk-update", authenticateToken, requireAdmin, async 
 // Delete user
 app.delete("/api/admin/users/:id", authenticateToken, requireAdmin, async (req, res) => {
   const { id } = req.params;
+  if (id === PROTECTED_ADMIN_ID) {
+    return res.status(403).json({ error: "This admin account cannot be deleted" });
+  }
   try {
     await prisma.$transaction([
       // Delete user's dependent records
@@ -408,7 +634,7 @@ app.get("/api/admin/stores", authenticateToken, requireAdmin, async (req, res) =
         take: parseInt(limit),
         orderBy: { createdAt: "desc" },
         include: {
-          owner: { select: { name: true, phone: true } },
+          owner: { select: { name: true, phone: true, role: true, isBlocked: true } },
           _count: { select: { followers: true, posts: true, products: true } },
         },
       }),
@@ -448,6 +674,77 @@ app.delete("/api/admin/stores/:id", authenticateToken, requireAdmin, async (req,
   }
 });
 
+// Admin: List all stores with team member counts
+app.get("/api/admin/store-members", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { search } = req.query as any;
+    const where: any = {};
+    if (search) {
+      where.OR = [
+        { storeName: { contains: search, mode: 'insensitive' } },
+        { owner: { name: { contains: search, mode: 'insensitive' } } },
+      ];
+    }
+    const stores = await prisma.store.findMany({
+      where,
+      select: {
+        id: true,
+        storeName: true,
+        category: true,
+        logoUrl: true,
+        createdAt: true,
+        owner: { select: { id: true, name: true, phone: true, role: true, email: true } },
+        _count: { select: { teamMembers: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(stores);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch store members" });
+  }
+});
+
+// Admin: Get store details + owner + all team members
+app.get("/api/admin/store-members/:storeId", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const store = await prisma.store.findUnique({
+      where: { id: storeId },
+      select: {
+        id: true,
+        storeName: true,
+        category: true,
+        logoUrl: true,
+        address: true,
+        phone: true,
+        createdAt: true,
+        owner: { select: { id: true, name: true, phone: true, role: true, email: true, createdAt: true } },
+        teamMembers: {
+          select: { id: true, name: true, phone: true, role: true, createdAt: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+    if (!store) return res.status(404).json({ error: "Store not found" });
+    res.json(store);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch store details" });
+  }
+});
+
+// Admin: Delete a team member
+app.delete("/api/admin/team/:memberId", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    const member = await prisma.teamMember.findUnique({ where: { id: memberId } });
+    if (!member) return res.status(404).json({ error: "Team member not found" });
+    await prisma.teamMember.delete({ where: { id: memberId } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete team member" });
+  }
+});
+
 // List all reports
 app.get("/api/admin/reports", authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -484,18 +781,24 @@ app.delete("/api/admin/reports/:id", authenticateToken, requireAdmin, async (req
   }
 });
 
-// Admin: List all conversations on the platform
+// Admin: List conversations — paginated, most recent message per pair only
 app.get("/api/admin/chats", authenticateToken, requireAdmin, async (req, res) => {
   try {
+    const { page = "1", limit = "20" } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Fetch the most recent N*2 messages as a reasonable proxy for conversation pairs
     const messages = await prisma.message.findMany({
       orderBy: { createdAt: "desc" },
+      take: parseInt(limit) * 10, // oversample to account for duplicates per pair
+      skip,
       include: {
-        sender: { select: { id: true, name: true, role: true } },
-        receiver: { select: { id: true, name: true, role: true } },
+        sender:   { select: { id: true, name: true, role: true, stores: { select: { storeName: true }, take: 1 } } },
+        receiver: { select: { id: true, name: true, role: true, stores: { select: { storeName: true }, take: 1 } } },
       },
     });
 
-    const conversationPairs = new Map();
+    const conversationPairs = new Map<string, any>();
     for (const msg of messages) {
       const ids = [msg.senderId, msg.receiverId].sort();
       const key = ids.join("_");
@@ -512,7 +815,9 @@ app.get("/api/admin/chats", authenticateToken, requireAdmin, async (req, res) =>
         conversationPairs.get(key).count++;
       }
     }
-    res.json(Array.from(conversationPairs.values()));
+
+    const pairs = Array.from(conversationPairs.values()).slice(0, parseInt(limit));
+    res.json(pairs);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch admin chats" });
   }
@@ -533,13 +838,239 @@ app.get("/api/admin/chats/history", authenticateToken, requireAdmin, async (req,
       },
       orderBy: { createdAt: "asc" },
       include: {
-        sender: { select: { id: true, name: true } },
-        receiver: { select: { id: true, name: true } },
+        sender: { select: { id: true, name: true, role: true, kycStoreName: true, stores: { select: { storeName: true } } } },
+        receiver: { select: { id: true, name: true, role: true, kycStoreName: true, stores: { select: { storeName: true } } } },
       },
     });
     res.json(messages);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch chat history" });
+  }
+});
+
+// --- App Settings Endpoints ---
+// Public: Get app settings (for main app)
+app.get("/api/app-settings", async (req, res) => {
+  try {
+    let settings = await prisma.appSettings.findUnique({ where: { id: "singleton" } });
+    if (!settings) {
+      settings = await prisma.appSettings.create({ data: { id: "singleton" } });
+    }
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch app settings" });
+  }
+});
+
+// Admin: Get app settings
+app.get("/api/admin/settings", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    let settings = await prisma.appSettings.findUnique({ where: { id: "singleton" } });
+    if (!settings) {
+      settings = await prisma.appSettings.create({ data: { id: "singleton" } });
+    }
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch settings" });
+  }
+});
+
+// Admin: Update app settings
+app.put("/api/admin/settings", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { appName, logoUrl, primaryColor, accentColor, carouselImages } = req.body;
+    const updateData: any = {};
+    if (appName !== undefined) updateData.appName = appName;
+    if (logoUrl !== undefined) updateData.logoUrl = logoUrl;
+    if (primaryColor !== undefined) updateData.primaryColor = primaryColor;
+    if (accentColor !== undefined) updateData.accentColor = accentColor;
+    if (carouselImages !== undefined) updateData.carouselImages = carouselImages;
+
+    const settings = await prisma.appSettings.upsert({
+      where: { id: "singleton" },
+      update: updateData,
+      create: { id: "singleton", ...updateData },
+    });
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update settings" });
+  }
+});
+
+// Admin: Upload settings image (logo or carousel)
+app.post("/api/admin/settings/upload", authenticateToken, requireAdmin, upload.single("image"), async (req: any, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+    // If using S3, file.location will contain the URL; else use local path
+    const imageUrl = file.location || `/uploads/${file.filename}`;
+    res.json({ url: imageUrl });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
+// --- Complaint Endpoints ---
+// User: Submit a complaint
+app.post("/api/complaints", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user.userId;
+    const { issueType, description } = req.body;
+
+    if (!issueType || !description) {
+      return res.status(400).json({ error: "Issue type and description are required" });
+    }
+
+    const complaint = await prisma.complaint.create({
+      data: { userId, issueType, description },
+    });
+    res.json(complaint);
+  } catch (error) {
+    console.error("Failed to create complaint:", error);
+    res.status(500).json({ error: "Failed to submit complaint" });
+  }
+});
+
+// Admin: List all complaints
+app.get("/api/admin/complaints", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, page = "1", limit = "20" } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const where: any = {};
+    if (status && status !== "all") where.status = status;
+
+    const [complaints, total, openCount] = await Promise.all([
+      prisma.complaint.findMany({
+        where,
+        skip,
+        take: parseInt(limit),
+        orderBy: { createdAt: "desc" },
+        include: {
+          user: { select: { id: true, name: true, phone: true, role: true } },
+        },
+      }),
+      prisma.complaint.count({ where }),
+      prisma.complaint.count({ where: { status: "open" } }),
+    ]);
+
+    res.json({ complaints, total, openCount, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch complaints" });
+  }
+});
+
+// Admin: Update complaint status
+app.put("/api/admin/complaints/:id", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { status, adminNotes } = req.body;
+    const updateData: any = {};
+    if (status) updateData.status = status;
+    if (adminNotes !== undefined) updateData.adminNotes = adminNotes;
+
+    const complaint = await prisma.complaint.update({
+      where: { id: req.params.id },
+      data: updateData,
+    });
+    res.json(complaint);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update complaint" });
+  }
+});
+
+// Admin: Delete complaint
+app.delete("/api/admin/complaints/:id", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await prisma.complaint.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete complaint" });
+  }
+});
+
+// --- Admin Post Management ---
+// Admin: List all posts
+app.get("/api/admin/posts", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { search, page = "1", limit = "20" } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const where: any = {};
+    if (search) {
+      where.OR = [
+        { caption: { contains: search, mode: "insensitive" } },
+        { store: { storeName: { contains: search, mode: "insensitive" } } },
+      ];
+    }
+
+    const [posts, total] = await Promise.all([
+      prisma.post.findMany({
+        where,
+        skip,
+        take: parseInt(limit),
+        orderBy: { createdAt: "desc" },
+        include: {
+          store: { select: { id: true, storeName: true, owner: { select: { name: true, role: true } } } },
+          _count: { select: { likes: true } },
+        },
+      }),
+      prisma.post.count({ where }),
+    ]);
+
+    res.json({ posts, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch posts" });
+  }
+});
+
+// Admin: Delete a post
+app.delete("/api/admin/posts/:id", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Delete related records first
+    await prisma.like.deleteMany({ where: { postId: id } });
+    await prisma.savedItem.deleteMany({ where: { type: 'post', referenceId: id } });
+    await prisma.post.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Admin delete post error:", error);
+    res.status(500).json({ error: "Failed to delete post" });
+  }
+});
+
+// --- Search History ---
+// Save search query
+app.post("/api/search-history", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user.userId;
+    const { query } = req.body;
+    if (!query || !query.trim()) return res.status(400).json({ error: "Query is required" });
+
+    // Avoid duplicate recent entries
+    const recent = await prisma.searchHistory.findFirst({
+      where: { userId, query: query.trim() },
+      orderBy: { createdAt: 'desc' },
+    });
+    
+    if (!recent || (Date.now() - new Date(recent.createdAt).getTime()) > 60000) {
+      await prisma.searchHistory.create({
+        data: { userId, query: query.trim() },
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to save search history" });
+  }
+});
+
+// Delete search history
+app.delete("/api/search-history", authenticateToken, async (req, res) => {
+  try {
+    const userId = (req as any).user.userId;
+    await prisma.searchHistory.deleteMany({ where: { userId } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to clear search history" });
   }
 });
 
@@ -568,6 +1099,7 @@ app.post("/api/kyc/submit", authenticateToken, async (req, res) => {
       select: { id: true, kycStatus: true, kycSubmittedAt: true },
     });
 
+    await pubClient.del(ADMIN_STATS_KEY);
     res.json(user);
   } catch (error) {
     res.status(500).json({ error: "Failed to submit KYC" });
@@ -604,7 +1136,7 @@ app.get("/api/admin/kyc", authenticateToken, requireAdmin, async (req, res) => {
         orderBy: [{ kycStatus: "asc" }, { kycSubmittedAt: "desc" }],
         select: {
           id: true, name: true, phone: true, role: true,
-          kycStatus: true, kycDocumentUrl: true, kycSelfieUrl: true,
+          kycStatus: true, kycDocumentUrl: true, kycSelfieUrl: true, kycStoreName: true, kycStorePhoto: true,
           kycNotes: true, kycSubmittedAt: true, kycReviewedAt: true,
         },
       }),
@@ -636,6 +1168,7 @@ app.put("/api/admin/kyc/:userId", authenticateToken, requireAdmin, async (req, r
       select: { id: true, name: true, kycStatus: true },
     });
 
+    await pubClient.del(ADMIN_STATS_KEY);
     res.json(user);
   } catch (error) {
     res.status(500).json({ error: "Failed to update KYC status" });
@@ -654,7 +1187,25 @@ app.get("/api/users/:id", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
-
+// Update User Profile
+app.put("/api/users/:id", authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reqUser = (req as any).user;
+    if (reqUser.userId !== id && reqUser.role !== "admin") {
+      return res.status(403).json({ error: "Unauthorized to update this user" });
+    }
+    const { name, phone, email } = req.body;
+    const user = await prisma.user.update({
+      where: { id },
+      data: { name, phone, email }
+    });
+    await pubClient.del(ADMIN_STATS_KEY);
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update user profile" });
+  }
+});
 // Customer: followed stores
 app.get("/api/users/:id/following", authenticateToken, async (req, res) => {
   try {
@@ -820,6 +1371,7 @@ app.put("/api/stores/:id", authenticateToken, async (req, res) => {
       where: { id: req.params.id },
       data: updateData
     });
+    await pubClient.del(ADMIN_STATS_KEY);
     res.json(store);
   } catch (error) {
     console.error("Failed to update store:", error);
@@ -828,8 +1380,19 @@ app.put("/api/stores/:id", authenticateToken, async (req, res) => {
 });
 
 app.get("/api/stores", async (req, res) => {
-  const stores = await prisma.store.findMany();
-  res.json(stores);
+  try {
+    const { page = "1", limit = "20", category } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const where: any = { owner: { isBlocked: false } };
+    if (category) where.category = category;
+    const [stores, total] = await Promise.all([
+      prisma.store.findMany({ where, skip, take: parseInt(limit), orderBy: { createdAt: 'desc' } }),
+      prisma.store.count({ where }),
+    ]);
+    res.json({ stores, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch stores" });
+  }
 });
 
 // Pincode → City/State lookup (India Post API)
@@ -862,10 +1425,10 @@ app.get("/api/pincode/:code", async (req, res) => {
 
 app.get("/api/stores/:id", async (req, res) => {
   const { userId } = req.query;
-  const store = await prisma.store.findUnique({ 
+  const store = await prisma.store.findUnique({
     where: { id: req.params.id },
     include: {
-      owner: { select: { role: true } },
+      owner: { select: { role: true, isBlocked: true } },
       _count: {
         select: { posts: true, products: true, followers: true }
       },
@@ -874,6 +1437,9 @@ app.get("/api/stores/:id", async (req, res) => {
       } : false
     }
   });
+  if (!store || store.owner?.isBlocked) return res.status(404).json({ error: "Store not found" });
+  // Short public cache — store profiles are read-heavy, change infrequently
+  res.set('Cache-Control', 'public, max-age=30');
   res.json(store);
 });
 
@@ -905,16 +1471,27 @@ app.post("/api/stores/:id/follow", authenticateToken, async (req, res) => {
 });
 
 app.get("/api/stores/:id/posts", async (req, res) => {
-  const posts = await prisma.post.findMany({
-    where: { storeId: req.params.id },
-    include: { product: true, store: { include: { owner: true } } },
-    orderBy: [
-      { isOpeningPost: 'desc' },
-      { isPinned: 'desc' },
-      { createdAt: 'desc' }
-    ]
-  });
-  res.json(posts);
+  try {
+    const { page = "1", limit = "30" } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const blockedFilter = { storeId: req.params.id, store: { owner: { isBlocked: false } } };
+    const [posts, total] = await Promise.all([
+      prisma.post.findMany({
+        where: blockedFilter,
+        include: {
+          product: { select: { id: true, productName: true, price: true, category: true } },
+          _count: { select: { likes: true } },
+        },
+        orderBy: [{ isOpeningPost: 'desc' }, { isPinned: 'desc' }, { createdAt: 'desc' }],
+        skip,
+        take: parseInt(limit),
+      }),
+      prisma.post.count({ where: blockedFilter }),
+    ]);
+    res.json({ posts, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch posts" });
+  }
 });
 
 // Products
@@ -929,16 +1506,16 @@ app.post("/api/products", authenticateToken, async (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   const { search, category, storeId } = req.query;
-  const where: any = {};
-  
+  const where: any = { store: { owner: { isBlocked: false } } };
+
   if (search) {
     where.OR = [
-      { productName: { contains: String(search) } },
-      { description: { contains: String(search) } },
-      { brand: { contains: String(search) } },
+      { productName: { contains: String(search), mode: 'insensitive' } },
+      { description: { contains: String(search), mode: 'insensitive' } },
+      { brand: { contains: String(search), mode: 'insensitive' } },
     ];
   }
-  
+
   if (category) {
     where.category = String(category);
   }
@@ -947,18 +1524,20 @@ app.get("/api/products", async (req, res) => {
     where.storeId = String(storeId);
   }
 
-  const products = await prisma.product.findMany({
-    where,
-    include: { store: true }
-  });
-  res.json(products);
+  const { page = "1", limit = "20" } = req.query as any;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
+  const [products, total] = await Promise.all([
+    prisma.product.findMany({ where, skip, take: parseInt(limit), include: { store: { select: { id: true, storeName: true, logoUrl: true } } }, orderBy: { createdAt: 'desc' } }),
+    prisma.product.count({ where }),
+  ]);
+  res.json({ products, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
 });
 
-// Mixed Search Endpoint
+// Mixed Search Endpoint — all filtering pushed to the database, never loads full tables
 app.get("/api/search", authenticateToken, async (req, res) => {
   const userRole = (req as any).user.role;
   const { q } = req.query;
-  if (!q) return res.json({ products: [], stores: [] });
+  if (!q || String(q).trim().length < 2) return res.json({ products: [], stores: [] });
 
   let allowedRoles: string[] = [];
   if (userRole === 'customer') allowedRoles = ['retailer'];
@@ -966,80 +1545,140 @@ app.get("/api/search", authenticateToken, async (req, res) => {
   else if (['supplier', 'manufacturer', 'brand'].includes(userRole)) allowedRoles = ['retailer'];
   else if (userRole === 'admin') allowedRoles = ['customer', 'retailer', 'supplier', 'manufacturer', 'brand', 'admin'];
 
-  const searchStr = String(q).toLowerCase().trim();
-
-  // Check if searching for 24-hour stores
-  const is24HourSearch = searchStr.includes('24 hour') || searchStr.includes('24h') || searchStr.includes('24 hours') || searchStr === 'open 24';
+  const searchStr = String(q).trim();
 
   try {
-    const allProducts = await prisma.product.findMany({ include: { store: { include: { owner: true } } } });
-    const products = allProducts.filter(p => 
-      p.store?.owner && allowedRoles.includes(p.store.owner.role) && (
-        (p.productName && p.productName.toLowerCase().includes(searchStr)) ||
-        (p.brand && p.brand.toLowerCase().includes(searchStr)) ||
-        (p.category && p.category.toLowerCase().includes(searchStr))
-      )
-    ).slice(0, 20);
-
-    const allStores = await prisma.store.findMany({ include: { owner: true } });
-    
-    // Helper: check if store is currently open
-    const isStoreCurrentlyOpen = (s: any): boolean => {
-      if (s.is24Hours) {
-        // Even 24h stores respect workingDays
-        if (s.workingDays) {
-          const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-          const today = dayNames[new Date().getDay()];
-          if (!s.workingDays.includes(today)) return false;
-        }
-        return true;
-      }
-      // Check working days first
-      if (s.workingDays) {
-        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        const today = dayNames[new Date().getDay()];
-        if (!s.workingDays.includes(today)) return false;
-      }
-      if (!s.openingTime || !s.closingTime) return true; // assume open if no times set
-      const now = new Date();
-      const [oH, oM] = s.openingTime.split(':').map(Number);
-      const [cH, cM] = s.closingTime.split(':').map(Number);
-      const nowMins = now.getHours() * 60 + now.getMinutes();
-      const openMins = oH * 60 + oM;
-      const closeMins = cH * 60 + cM;
-      return closeMins > openMins ? (nowMins >= openMins && nowMins < closeMins) : (nowMins >= openMins || nowMins < closeMins);
-    };
-
-    const stores = allStores.filter(s => {
-      if (!s.owner || !allowedRoles.includes(s.owner.role)) return false;
-      
-      // 24-hour search shortcut
-      if (is24HourSearch && s.is24Hours) return true;
-      
-      return (
-        (s.storeName && s.storeName.toLowerCase().includes(searchStr)) ||
-        (s.category && s.category.toLowerCase().includes(searchStr)) ||
-        (s.owner.role && s.owner.role.toLowerCase().includes(searchStr.replace(/\s+/g, ''))) ||
-        (s.owner.role === 'retailer' && 'retail store'.includes(searchStr)) ||
-        (s.description && s.description.toLowerCase().includes(searchStr)) ||
-        (s.address && s.address.toLowerCase().includes(searchStr)) ||
-        (s.postalCode && String(s.postalCode).includes(searchStr)) ||
-        (s.manualProductText && s.manualProductText.toLowerCase().includes(searchStr)) ||
-        ((s as any).city && (s as any).city.toLowerCase().includes(searchStr)) ||
-        ((s as any).state && (s as any).state.toLowerCase().includes(searchStr))
-      );
-    })
-    // Sort: open stores first, then closed
-    .sort((a, b) => {
-      const aOpen = isStoreCurrentlyOpen(a) ? 0 : 1;
-      const bOpen = isStoreCurrentlyOpen(b) ? 0 : 1;
-      return aOpen - bOpen;
-    })
-    .slice(0, 20);
+    const [products, stores] = await Promise.all([
+      prisma.product.findMany({
+        where: {
+          store: { owner: { role: { in: allowedRoles } } },
+          OR: [
+            { productName: { contains: searchStr, mode: 'insensitive' } },
+            { brand: { contains: searchStr, mode: 'insensitive' } },
+            { category: { contains: searchStr, mode: 'insensitive' } },
+            { description: { contains: searchStr, mode: 'insensitive' } },
+          ],
+        },
+        select: {
+          id: true, productName: true, brand: true, category: true, price: true,
+          storeId: true, store: { select: { id: true, storeName: true, logoUrl: true } },
+        },
+        take: 20,
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.store.findMany({
+        where: {
+          owner: { role: { in: allowedRoles } },
+          OR: [
+            { storeName: { contains: searchStr, mode: 'insensitive' } },
+            { category: { contains: searchStr, mode: 'insensitive' } },
+            { description: { contains: searchStr, mode: 'insensitive' } },
+            { address: { contains: searchStr, mode: 'insensitive' } },
+            { city: { contains: searchStr, mode: 'insensitive' } },
+            { state: { contains: searchStr, mode: 'insensitive' } },
+            { manualProductText: { contains: searchStr, mode: 'insensitive' } },
+          ],
+        },
+        include: {
+          owner: { select: { role: true } },
+        },
+        take: 20,
+        orderBy: { averageRating: 'desc' },
+      }),
+    ]);
 
     res.json({ products, stores });
   } catch (error) {
     console.error("Search error:", error);
+    res.status(500).json({ error: "Failed to perform search" });
+  }
+});
+
+// AI-powered search — Gemini reformulates the query into structured keywords + optional category
+app.get("/api/search/ai", authenticateToken, async (req, res) => {
+  const { q } = req.query;
+  if (!q || String(q).trim().length < 2) return res.json({ products: [], stores: [], query: '' });
+
+  const userRole = (req as any).user.role;
+  let allowedRoles: string[] = [];
+  if (userRole === 'customer') allowedRoles = ['retailer'];
+  else if (userRole === 'retailer') allowedRoles = ['retailer', 'supplier', 'manufacturer', 'brand'];
+  else if (['supplier', 'manufacturer', 'brand'].includes(userRole)) allowedRoles = ['retailer'];
+  else if (userRole === 'admin') allowedRoles = ['customer', 'retailer', 'supplier', 'manufacturer', 'brand', 'admin'];
+
+  let searchStr = String(q).trim();
+
+  // Use Gemini to extract a clean search query from natural language
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY') {
+    try {
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{
+                text: `Extract the core search keywords from this shopping query. Return ONLY a JSON object with keys "keywords" (string, 2-5 words max) and "category" (one of: Electronics, Fashion, Grocery, Food, Beauty, Sports, Health, General, Jewellery, Vehicles, Education, Services, Furniture, Pharmacy, or empty string if unclear). No explanation.\n\nQuery: "${String(q).trim()}"`
+              }]
+            }],
+            generationConfig: { maxOutputTokens: 100, temperature: 0.1 }
+          })
+        }
+      );
+      if (geminiRes.ok) {
+        const geminiData = await geminiRes.json();
+        const text = geminiData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.keywords) searchStr = parsed.keywords;
+        }
+      }
+    } catch (e) {
+      // Fall back to original query on any Gemini error
+    }
+  }
+
+  try {
+    const [products, stores] = await Promise.all([
+      prisma.product.findMany({
+        where: {
+          store: { owner: { role: { in: allowedRoles } } },
+          OR: [
+            { productName: { contains: searchStr, mode: 'insensitive' } },
+            { brand: { contains: searchStr, mode: 'insensitive' } },
+            { category: { contains: searchStr, mode: 'insensitive' } },
+            { description: { contains: searchStr, mode: 'insensitive' } },
+          ],
+        },
+        select: {
+          id: true, productName: true, brand: true, category: true, price: true,
+          storeId: true, store: { select: { id: true, storeName: true, logoUrl: true } },
+        },
+        take: 20,
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.store.findMany({
+        where: {
+          owner: { role: { in: allowedRoles } },
+          OR: [
+            { storeName: { contains: searchStr, mode: 'insensitive' } },
+            { category: { contains: searchStr, mode: 'insensitive' } },
+            { description: { contains: searchStr, mode: 'insensitive' } },
+            { address: { contains: searchStr, mode: 'insensitive' } },
+            { city: { contains: searchStr, mode: 'insensitive' } },
+            { manualProductText: { contains: searchStr, mode: 'insensitive' } },
+          ],
+        },
+        include: { owner: { select: { role: true } } },
+        take: 20,
+        orderBy: { averageRating: 'desc' },
+      }),
+    ]);
+    res.json({ products, stores, query: searchStr });
+  } catch (error) {
+    console.error("AI search error:", error);
     res.status(500).json({ error: "Failed to perform search" });
   }
 });
@@ -1097,35 +1736,14 @@ app.post("/api/posts", authenticateToken, async (req, res) => {
 
     const post = await prisma.post.create({ data: postData });
     
-    // Generate Notifications for all store followers
-    const storeWithFollowers = await prisma.store.findUnique({
-      where: { id: post.storeId },
-      include: { followers: true }
-    });
-
-    if (storeWithFollowers && storeWithFollowers.followers.length > 0) {
-      const notificationData = storeWithFollowers.followers.map(follow => ({
-        userId: follow.userId,
-        type: 'NEW_POST',
-        content: `${storeWithFollowers.storeName} just published a new post!`,
-        referenceId: post.id
-      }));
-
-      // Bulk create notifications in DB
-      await prisma.notification.createMany({ data: notificationData });
-
-      // Emit to active WebSocket connections
-      for (const follow of storeWithFollowers.followers) {
-        // Find the newly created notification to send exact data to socket
-        const newNotif = await prisma.notification.findFirst({
-          where: { userId: follow.userId, referenceId: post.id, type: 'NEW_POST' },
-          orderBy: { createdAt: 'desc' }
-        });
-        
-        if (newNotif) {
-          io.to(follow.userId).emit('newNotification', newNotif);
-        }
-      }
+    // Offload notification generation to background queue
+    const store = await prisma.store.findUnique({ where: { id: post.storeId } });
+    if (store) {
+      await notificationQueue.add('publishPostNotifications', {
+        postId: post.id,
+        storeId: store.id,
+        storeName: store.storeName
+      });
     }
 
     res.json(post);
@@ -1146,57 +1764,51 @@ app.get("/api/posts", authenticateToken, async (req, res) => {
   else if (['supplier', 'manufacturer', 'brand'].includes(userRole)) allowedRoles = ['retailer'];
   else if (userRole === 'admin') allowedRoles = ['customer', 'retailer', 'supplier', 'manufacturer', 'brand', 'admin'];
 
-  let whereClause: any = {
-    store: {
-      owner: { role: { in: allowedRoles } }
-    }
-  };
+  const page = parseInt(String(req.query.page || '1'));
+  const limit = Math.min(parseInt(String(req.query.limit || '20')), 50);
+  const skip = (page - 1) * limit;
 
-  if (feedType === 'following') {
-    const follows = await prisma.follow.findMany({ where: { userId } });
-    whereClause.storeId = { in: follows.map(f => f.storeId) };
-  }
+  let storeFilter: any = { owner: { role: { in: allowedRoles }, isBlocked: false } };
 
-  let posts = await prisma.post.findMany({
-    where: whereClause,
-    include: {
-      store: { include: { owner: true } },
-      product: true,
-      likes: true
-    },
-    orderBy: [
-      { createdAt: 'desc' }
-    ]
-  });
-
-  if (locationRange && lat && lng && locationRange !== 'all') {
+  // Bounding-box filter pushed to the DB — avoids loading all posts into memory
+  if (locationRange && locationRange !== 'all' && lat && lng) {
     const rangeKm = parseFloat(String(locationRange));
     const userLat = parseFloat(String(lat));
     const userLng = parseFloat(String(lng));
-    
-    posts = (posts as any[]).filter((post: any) => {
-      const storeLat = post.store.latitude;
-      const storeLng = post.store.longitude;
-      const R = 6371; // km
-      const dLat = (storeLat - userLat) * Math.PI / 180;
-      const dLng = (storeLng - userLng) * Math.PI / 180;
-      const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(userLat * Math.PI / 180) * Math.cos(storeLat * Math.PI / 180) * 
-        Math.sin(dLng/2) * Math.sin(dLng/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return (R * c) <= rangeKm;
-    });
+    const latDelta = rangeKm / 111;
+    const lngDelta = rangeKm / (111 * Math.cos(userLat * Math.PI / 180));
+    storeFilter = {
+      ...storeFilter,
+      latitude:  { gte: userLat - latDelta,  lte: userLat + latDelta  },
+      longitude: { gte: userLng - lngDelta, lte: userLng + lngDelta },
+    };
   }
 
-  // Pagination
-  const page = parseInt(String(req.query.page || '1'));
-  const limit = parseInt(String(req.query.limit || '20'));
-  const total = posts.length;
-  const paginatedPosts = posts.slice((page - 1) * limit, page * limit);
+  let whereClause: any = { store: storeFilter };
+
+  if (feedType === 'following') {
+    const follows = await prisma.follow.findMany({ where: { userId }, select: { storeId: true } });
+    whereClause.storeId = { in: follows.map(f => f.storeId) };
+  }
+
+  const [total, posts] = await Promise.all([
+    prisma.post.count({ where: whereClause }),
+    prisma.post.findMany({
+      where: whereClause,
+      include: {
+        store: { select: { id: true, storeName: true, logoUrl: true, latitude: true, longitude: true, category: true, averageRating: true, hideRatings: true, chatEnabled: true, ownerId: true, owner: { select: { id: true, role: true } } } },
+        product: { select: { id: true, productName: true, price: true, category: true } },
+        likes: { where: { userId }, select: { id: true } },
+        _count: { select: { likes: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+    }),
+  ]);
 
   res.json({
-    posts: paginatedPosts,
+    posts: posts.map(p => ({ ...p, isOwnPost: p.store.ownerId === userId })),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }
   });
 });
@@ -1205,10 +1817,13 @@ app.get("/api/posts", authenticateToken, async (req, res) => {
 app.get("/api/me/interactions", authenticateToken, async (req, res) => {
   try {
     const userId = (req as any).user.userId;
-    const likes = await prisma.like.findMany({ where: { userId } });
-    const saves = await prisma.savedItem.findMany({ where: { userId } });
-    const follows = await prisma.follow.findMany({ where: { userId } });
-    
+    // Capped: power users liking thousands of posts won't OOM the server
+    const [likes, saves, follows] = await Promise.all([
+      prisma.like.findMany({ where: { userId }, take: 500, orderBy: { createdAt: 'desc' } }),
+      prisma.savedItem.findMany({ where: { userId }, take: 500, orderBy: { createdAt: 'desc' } }),
+      prisma.follow.findMany({ where: { userId }, take: 500, orderBy: { createdAt: 'desc' } }),
+    ]);
+
     res.json({
       likedPostIds: likes.map(l => l.postId),
       savedPostIds: saves.filter(s => s.type === 'post').map(s => s.referenceId),
@@ -1284,6 +1899,29 @@ app.post("/api/posts/:id/pin", authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Failed to toggle pin" });
   }
 });
+// Edit Post (caption, price, imageUrl)
+app.put("/api/posts/:id", authenticateToken, async (req, res) => {
+  try {
+    const post = await prisma.post.findUnique({ where: { id: req.params.id }, include: { store: true } });
+    if (!post) return res.status(404).json({ error: "Not found" });
+    if (post.store.ownerId !== (req as any).user.userId) return res.status(403).json({ error: "Unauthorized" });
+
+    const { caption, imageUrl, price } = req.body;
+    const updated = await prisma.post.update({
+      where: { id: req.params.id },
+      data: {
+        ...(caption !== undefined && { caption }),
+        ...(imageUrl !== undefined && { imageUrl }),
+        ...(price !== undefined && { price: price ? parseFloat(price) : null }),
+      },
+      include: { product: { select: { id: true, productName: true, price: true, category: true } }, _count: { select: { likes: true } } }
+    });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to update post" });
+  }
+});
+
 // Delete Single Post
 app.delete("/api/posts/:id", authenticateToken, async (req, res) => {
   try {
@@ -1323,52 +1961,51 @@ app.delete("/api/stores/:storeId/posts", authenticateToken, async (req, res) => 
   }
 });
 
-// Conversations Inbox
+// Conversations Inbox — single-pass, no N+1 queries
 app.get("/api/conversations", authenticateToken, async (req, res) => {
   try {
     const userId = (req as any).user.userId;
 
-    // Fetch all messages involving this user
+    // Cap at 500 most-recent messages — enough to cover any realistic inbox, avoids OOM
     const allMessages = await prisma.message.findMany({
-      where: {
-        OR: [{ senderId: userId }, { receiverId: userId }],
-      },
+      where: { OR: [{ senderId: userId }, { receiverId: userId }] },
       orderBy: { createdAt: "desc" },
+      take: 500,
       include: {
-        sender: { select: { id: true, name: true, role: true } },
+        sender:   { select: { id: true, name: true, role: true } },
         receiver: { select: { id: true, name: true, role: true } },
       },
     });
 
-    // Group by unique conversation partner
-    const conversationsMap = new Map();
-    
+    // Collect unique partner IDs in one pass
+    const partnerIds = new Set<string>();
+    for (const msg of allMessages) {
+      partnerIds.add(msg.senderId === userId ? msg.receiverId : msg.senderId);
+    }
+
+    // Batch-fetch all partner stores in a single query (no N+1)
+    const partnerStores = await prisma.store.findMany({
+      where: { ownerId: { in: Array.from(partnerIds) } },
+      select: { ownerId: true, storeName: true, logoUrl: true },
+    });
+    const storeByOwner = new Map(partnerStores.map(s => [s.ownerId, s]));
+
+    const conversationsMap = new Map<string, any>();
     for (const msg of allMessages) {
       const isSender = msg.senderId === userId;
       const otherUser = isSender ? msg.receiver : msg.sender;
-      
-      if (!conversationsMap.has(otherUser.id)) {
-        // Find if this user owns a store for better display names
-        let displayName = otherUser.name;
-        let logoUrl = null;
-        if (otherUser.role === 'retailer') {
-           const store = await prisma.store.findFirst({ where: { ownerId: otherUser.id } });
-           if (store) {
-             displayName = store.storeName;
-             logoUrl = store.logoUrl;
-           }
-        }
+      if (conversationsMap.has(otherUser.id)) continue;
 
-        conversationsMap.set(otherUser.id, {
-          id: msg.id,
-          userId: otherUser.id,
-          storeName: displayName,
-          logoUrl: logoUrl,
-          lastMessage: msg.message,
-          timestamp: msg.createdAt,
-          unread: 0, // Mock unread for now
-        });
-      }
+      const store = storeByOwner.get(otherUser.id);
+      conversationsMap.set(otherUser.id, {
+        id: msg.id,
+        userId: otherUser.id,
+        storeName: store?.storeName ?? otherUser.name,
+        logoUrl: store?.logoUrl ?? null,
+        lastMessage: msg.message,
+        timestamp: msg.createdAt,
+        unread: 0,
+      });
     }
 
     res.json(Array.from(conversationsMap.values()));
@@ -1395,20 +2032,31 @@ app.get("/api/messages/:userId/:otherUserId", authenticateToken, async (req, res
     return res.status(403).json({ error: "Role permissions do not allow chatting with this user" });
   }
 
+  // Cursor-based pagination: default last 100 messages, client can pass ?before=<id> for history
+  const { before, limit = "100" } = req.query as any;
+  const take = Math.min(parseInt(limit), 100);
+
   const messages = await prisma.message.findMany({
     where: {
       OR: [
         { senderId: userId, receiverId: otherUserId },
         { senderId: otherUserId, receiverId: userId }
-      ]
+      ],
     },
-    orderBy: { createdAt: 'asc' }
+    orderBy: { createdAt: 'desc' },
+    take: take + 1,
+    ...(before ? { cursor: { id: before }, skip: 1 } : {}),
   });
-  res.json(messages);
+
+  const hasMore = messages.length > take;
+  if (hasMore) messages.pop();
+  messages.reverse(); // ascending order for display
+
+  res.json({ messages, hasMore, nextCursor: hasMore ? messages[0]?.id : null });
 });
 
 // Send message via HTTP (reliable fallback)
-app.post("/api/messages", authenticateToken, async (req, res) => {
+app.post("/api/messages", authenticateToken, messageLimiter, async (req, res) => {
   try {
     const senderId = (req as any).user.userId;
     const { receiverId, message, imageUrl } = req.body;
@@ -1437,12 +2085,20 @@ app.post("/api/messages", authenticateToken, async (req, res) => {
 // Reviews
 app.get("/api/reviews/store/:storeId", async (req, res) => {
   try {
-    const reviews = await prisma.review.findMany({
-      where: { storeId: req.params.storeId },
-      include: { user: { select: { id: true, name: true } } },
-      orderBy: { createdAt: 'desc' }
-    });
-    res.json(reviews);
+    const { page = "1", limit = "20" } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [reviews, total] = await Promise.all([
+      prisma.review.findMany({
+        where: { storeId: req.params.storeId },
+        include: { user: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: parseInt(limit),
+      }),
+      prisma.review.count({ where: { storeId: req.params.storeId } }),
+    ]);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ reviews, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch store reviews" });
   }
@@ -1450,12 +2106,20 @@ app.get("/api/reviews/store/:storeId", async (req, res) => {
 
 app.get("/api/reviews/product/:productId", async (req, res) => {
   try {
-    const reviews = await prisma.review.findMany({
-      where: { productId: req.params.productId },
-      include: { user: { select: { id: true, name: true } } },
-      orderBy: { createdAt: 'desc' }
-    });
-    res.json(reviews);
+    const { page = "1", limit = "20" } = req.query as any;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [reviews, total] = await Promise.all([
+      prisma.review.findMany({
+        where: { productId: req.params.productId },
+        include: { user: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: parseInt(limit),
+      }),
+      prisma.review.count({ where: { productId: req.params.productId } }),
+    ]);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ reviews, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch product reviews" });
   }
@@ -1547,10 +2211,11 @@ app.post("/api/notifications/read-all", authenticateToken, async (req, res) => {
   }
 });
 
-// Image Uploads
-app.post("/api/upload", authenticateToken, upload.single("file"), (req, res) => {
+// Image Uploads — returns S3 URL when configured, local path otherwise
+app.post("/api/upload", authenticateToken, upload.single("file"), (req: any, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-  res.json({ url: `/uploads/${req.file.filename}` });
+  const url = (req.file as any).location ?? `/uploads/${req.file.filename}`;
+  res.json({ url });
 });
 
 // Team Management — Full CRUD
@@ -1594,6 +2259,10 @@ app.post("/api/team", authenticateToken, async (req, res) => {
     // Validate inputs
     if (!phone || !password) return res.status(400).json({ error: "Phone and password are required" });
     if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
+
+    // Enforce 3-member limit
+    const memberCount = await prisma.teamMember.count({ where: { storeId } });
+    if (memberCount >= 3) return res.status(400).json({ error: "Maximum 3 team members allowed per store" });
 
     // Check unique phone
     const existing = await prisma.teamMember.findUnique({ where: { phone } });
@@ -1674,31 +2343,21 @@ io.on("connection", (socket) => {
       io.to(receiverId).emit("newMessage", savedMessage);
       io.to(senderId).emit("newMessage", savedMessage); // echo back to sender
 
-      // Auto-reply logic for retailers
+      // Auto-reply: first message from a customer to a retailer triggers a BullMQ delayed job
+      // (BullMQ survives server restarts; setTimeout does not)
       if (receiver?.role === 'retailer' && sender?.role === 'customer') {
-        const previousMessages = await prisma.message.count({
-          where: { senderId, receiverId }
-        });
-
-        // Trigger only on the first message from this customer to this retailer
+        const previousMessages = await prisma.message.count({ where: { senderId, receiverId } });
         if (previousMessages === 1) {
           const store = await prisma.store.findFirst({ where: { ownerId: receiverId } });
           if (store) {
-            const firstName = sender.name.split(' ')[0];
-            const storeDetails = `${store.storeName}, ${store.address} (Ph: ${store.phone || 'N/A'})`;
-            const autoReplyText = `Thanks for reaching out ${firstName}. Our team will connect shortly. \n\nStore Details: ${storeDetails}`;
-            
-            setTimeout(async () => {
-              try {
-                const autoReply = await prisma.message.create({
-                  data: { senderId: receiverId, receiverId: senderId, message: autoReplyText }
-                });
-                io.to(senderId).emit("newMessage", autoReply);
-                io.to(receiverId).emit("newMessage", autoReply);
-              } catch (e) {
-                console.error("Auto-reply failed:", e);
-              }
-            }, 1000);
+            await notificationQueue.add('autoReply', {
+              senderId,
+              receiverId,
+              storeName: store.storeName,
+              senderName: sender.name,
+              storePhone: store.phone,
+              storeAddress: store.address,
+            }, { delay: 1000 });
           }
         }
       }

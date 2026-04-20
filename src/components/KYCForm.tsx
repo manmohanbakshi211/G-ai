@@ -8,6 +8,7 @@ export default function KYCForm({ onComplete, onLogout, onBack }: { onComplete: 
   const [gstBill, setGstBill] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [uploadingField, setUploadingField] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, setter: (url: string) => void, fieldName: string) => {
     const file = e.target.files?.[0];
@@ -26,12 +27,12 @@ export default function KYCForm({ onComplete, onLogout, onBack }: { onComplete: 
       if (res.ok) {
         const data = await res.json();
         setter(data.url);
+        setErrorMsg('');
       } else {
-        alert("Upload failed");
+        setErrorMsg('Upload failed. Please try again.');
       }
-    } catch (e) {
-      console.error(e);
-      alert("Upload failed");
+    } catch {
+      setErrorMsg('Upload failed. Please check your connection.');
     } finally {
       setUploadingField(null);
     }
@@ -39,9 +40,10 @@ export default function KYCForm({ onComplete, onLogout, onBack }: { onComplete: 
 
   const handleSubmit = async () => {
     if (!storeName || !selfie || !storePhoto || !gstBill) {
-      alert("Please complete all KYC fields.");
+      setErrorMsg('Please complete all KYC fields before submitting.');
       return;
     }
+    setErrorMsg('');
     setLoading(true);
     try {
       // Submit KYC documents and intended store details
@@ -59,9 +61,8 @@ export default function KYCForm({ onComplete, onLogout, onBack }: { onComplete: 
       if (!kycRes.ok) throw new Error("Failed to submit KYC");
       
       onComplete();
-    } catch (err) {
-      console.error(err);
-      alert("Error submitting KYC");
+    } catch {
+      setErrorMsg('Failed to submit KYC. Please try again.');
     }
     setLoading(false);
   };
@@ -175,9 +176,18 @@ export default function KYCForm({ onComplete, onLogout, onBack }: { onComplete: 
                 )}
               </div>
               
+              {/* Error message */}
+              {errorMsg && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+                  <span className="font-semibold flex-shrink-0">⚠</span>
+                  <span>{errorMsg}</span>
+                  <button type="button" onClick={() => setErrorMsg('')} className="ml-auto text-red-400 hover:text-red-600"><X size={14} /></button>
+                </div>
+              )}
+
               {/* Submit Button */}
               <div className="pt-2">
-                <button 
+                <button
                   onClick={handleSubmit}
                   disabled={loading || !storeName || !selfie || !storePhoto || !gstBill}
                   className="w-full bg-gray-900 text-white py-3.5 rounded-xl font-bold tracking-wide disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-800 transition-colors shadow-sm flex items-center justify-center"

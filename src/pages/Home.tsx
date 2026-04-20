@@ -4,6 +4,7 @@ import { MapPin, MessageCircle, Store as StoreIcon, Heart, Bookmark, UserPlus, U
 import StarRating from '../components/StarRating';
 import NotificationBell from '../components/NotificationBell';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
 export default function HomePage() {
   const [posts, setPosts] = useState<any[]>([]);
@@ -11,10 +12,11 @@ export default function HomePage() {
     likedPostIds: [], savedPostIds: [], followedStoreIds: []
   });
   const [loading, setLoading] = useState(true);
-  const { token, user } = useAuth();
+  const { token, user, logout } = useAuth();
+  const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const isOwnPost = (post: any) => post.store?.ownerId === user?.id;
+  const isOwnPost = (post: any) => post.isOwnPost === true;
   const getStoreLink = (post: any) => isOwnPost(post) ? '/profile' : `/store/${post.storeId}`;
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -24,20 +26,35 @@ export default function HomePage() {
   const [locationRange, setLocationRange] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
 
-  // Carousel State
-  const bannerImages = [
+  // Carousel State — fetch from admin settings, fallback to defaults
+  const defaultBannerImages = [
     "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=800&q=80",
     "https://images.unsplash.com/photo-1555529771-835f59fc5efe?w=800&q=80",
     "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=800&q=80"
   ];
+  const [bannerImages, setBannerImages] = useState<string[]>(defaultBannerImages);
+  const [appName, setAppName] = useState('Local Discoveries');
   const [currentSlide, setCurrentSlide] = useState(0);
 
   useEffect(() => {
+    fetch('/api/app-settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.carouselImages && data.carouselImages.length > 0) {
+          setBannerImages(data.carouselImages);
+        }
+        if (data.appName) setAppName(data.appName);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (bannerImages.length === 0) return;
     const timer = setInterval(() => {
       setCurrentSlide((prev) => (prev + 1) % bannerImages.length);
     }, 3000);
     return () => clearInterval(timer);
-  }, []);
+  }, [bannerImages]);
 
   const fetchFeed = async () => {
     if (!token) return;
@@ -48,18 +65,22 @@ export default function HomePage() {
        const intRes = await fetch(`/api/me/interactions`, {
          headers: { 'Authorization': `Bearer ${token}` }
        });
+       
+       if (intRes.status === 401 || intRes.status === 403) {
+         logout();
+         return;
+       }
+       
        const intData = await intRes.json();
        setInteractions(intData);
 
        if (feedType === 'saved') {
-         // For saved feed, fetch all posts and filter by saved IDs
-         const postsRes = await fetch(`/api/posts?feedType=global&locationRange=all&lat=0&lng=0&limit=100`, {
+         const savedRes = await fetch(`/api/users/${user?.id}/saved`, {
            headers: { 'Authorization': `Bearer ${token}` }
          });
-         const postsData = await postsRes.json();
-         const allPosts = postsData.posts || postsData;
-         const savedPostIds = intData.savedPostIds || [];
-         setPosts(allPosts.filter((p: any) => savedPostIds.includes(p.id)));
+         if (savedRes.status === 401 || savedRes.status === 403) { logout(); return; }
+         const savedData = await savedRes.json();
+         setPosts(Array.isArray(savedData.posts) ? savedData.posts : []);
        } else {
          let lat = 0, lng = 0;
          if (locationRange !== 'all' && navigator.geolocation) {
@@ -71,17 +92,19 @@ export default function HomePage() {
              lng = pos.coords.longitude;
            } catch (err) {
              console.error("Failed to get location:", err);
-             alert("Enable location services for nearby recommendations.");
            }
          }
          const postsRes = await fetch(`/api/posts?feedType=${feedType}&locationRange=${locationRange}&lat=${lat}&lng=${lng}`, {
            headers: { 'Authorization': `Bearer ${token}` }
          });
+         if (postsRes.status === 401 || postsRes.status === 403) {
+           logout();
+           return;
+         }
          const postsData = await postsRes.json();
-         setPosts(postsData.posts || postsData);
+         setPosts(Array.isArray(postsData.posts) ? postsData.posts : (Array.isArray(postsData) ? postsData : []));
        }
-    } catch (e) {
-      console.error(e);
+    } catch {
       setPosts([]);
     }
     setLoading(false);
@@ -99,7 +122,7 @@ export default function HomePage() {
     }));
     try {
       await fetch(`/api/posts/${postId}/like`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
-    } catch (e) { console.error(e); }
+    } catch {}
   };
 
   const toggleSave = async (postId: string) => {
@@ -110,7 +133,7 @@ export default function HomePage() {
     }));
     try {
       await fetch(`/api/posts/${postId}/save`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
-    } catch (e) { console.error(e); }
+    } catch {}
   };
 
   const toggleFollow = async (storeId: string) => {
@@ -120,12 +143,12 @@ export default function HomePage() {
       followedStoreIds: isFollowed ? prev.followedStoreIds.filter(id => id !== storeId) : [...prev.followedStoreIds, storeId]
     }));
     try {
-      await fetch(`/api/stores/${storeId}/follow`, { 
-        method: 'POST', 
+      await fetch(`/api/stores/${storeId}/follow`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ userId: user?.id })
       });
-    } catch (e) { console.error(e); }
+    } catch {}
   };
 
   const handleShare = async (post: any) => {
@@ -139,24 +162,24 @@ export default function HomePage() {
         await navigator.share(shareData);
       } else {
         await navigator.clipboard.writeText(shareData.url);
-        alert('Link copied to clipboard!');
+        showToast('Link copied to clipboard!', { type: 'success' });
       }
     } catch (e) { /* user cancelled share */ }
   };
 
   const getLikeCount = (post: any) => {
-    const baseCount = post.likes?.length || 0;
-    const initiallyLiked = post.likes?.some((l: any) => l.userId === user?.id);
+    const total = post._count?.likes ?? post.likes?.length ?? 0;
+    const initiallyLiked = (post.likes?.length ?? 0) > 0;
     const currentlyLiked = interactions.likedPostIds.includes(post.id);
-    if (initiallyLiked && !currentlyLiked) return Math.max(0, baseCount - 1);
-    if (!initiallyLiked && currentlyLiked) return baseCount + 1;
-    return baseCount;
+    if (initiallyLiked && !currentlyLiked) return Math.max(0, total - 1);
+    if (!initiallyLiked && currentlyLiked) return total + 1;
+    return total;
   };
 
   return (
     <div className="max-w-md mx-auto bg-gray-50 min-h-screen pb-20">
       <header className="bg-white px-4 py-3 sticky top-0 z-20 border-b border-gray-100 flex justify-between items-center">
-        <h1 className="text-xl font-bold text-gray-900">Local Discoveries</h1>
+        <h1 className="text-xl font-bold text-gray-900">{appName}</h1>
         <NotificationBell />
       </header>
 
@@ -281,8 +304,8 @@ export default function HomePage() {
                       )}
                     </div>
                   </div>
-                  {post.store.ownerId !== user?.id && (
-                    <button 
+                  {!isOwnPost(post) && (
+                    <button
                       onClick={() => toggleFollow(post.storeId)}
                       className={`text-xs font-semibold px-3 py-1.5 rounded-full transition-colors flex items-center ${isFollowed ? 'bg-gray-100 text-gray-700' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}
                     >
@@ -313,7 +336,7 @@ export default function HomePage() {
                         <Heart size={24} className={`transition-colors ${isLiked ? 'fill-red-500 text-red-500' : 'text-gray-900 group-hover:text-red-500'}`} />
                         <span className="ml-1.5 font-semibold text-sm text-gray-700">{likeCount}</span>
                       </button>
-                      {!isOwnPost(post) && (
+                      {!isOwnPost(post) && post.store.chatEnabled !== false && (
                         <Link to={`/chat/${post.store.ownerId}`} className="flex items-center group transition-colors">
                           <MessageCircle size={24} className="text-gray-900 group-hover:text-indigo-600" />
                         </Link>

@@ -134,6 +134,7 @@ export default function KycReview() {
               <thead>
                 <tr className="border-b border-gray-100 text-left">
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
+                  <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Business Name</th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Documents</th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
@@ -154,6 +155,15 @@ export default function KycReview() {
                           <p className="text-xs text-gray-400">{u.phone || '—'}</p>
                         </div>
                       </div>
+                    </td>
+                    <td className="px-5 py-3">
+                      {u.kycStoreName ? (
+                        <span className="text-sm font-medium text-indigo-700">{u.kycStoreName}</span>
+                      ) : u.role !== 'customer' ? (
+                        <span className="text-sm font-medium text-indigo-700">{u.name}</span>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3">
                       <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium ${roleBadge(u.role)}`}>{u.role}</span>

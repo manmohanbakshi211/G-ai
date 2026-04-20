@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Send, Paperclip, X, Loader2 } from 'lucide-react';
+import { ArrowLeft, Send, Paperclip, X, Loader2, AlertCircle } from 'lucide-react';
 
 export default function ChatPage() {
   const { userId } = useParams();
@@ -9,11 +9,13 @@ export default function ChatPage() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [receiverName, setReceiverName] = useState('');
   const [receiverInitial, setReceiverInitial] = useState('');
   const [receiverLogo, setReceiverLogo] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const token = localStorage.getItem('token');
   const userStr = localStorage.getItem('user');
@@ -72,8 +74,8 @@ export default function ChatPage() {
         if (!res.ok) throw new Error('Failed to fetch messages');
         return res.json();
       })
-      .then(data => setMessages(data))
-      .catch(err => console.error(err));
+      .then(data => setMessages(Array.isArray(data) ? data : (data.messages ?? [])))
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -84,8 +86,18 @@ export default function ChatPage() {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setImageFile(file);
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
       setImagePreview(URL.createObjectURL(file));
+      setUploadError('');
     }
+  };
+
+  const clearImagePreview = () => {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImagePreview('');
+    setImageFile(null);
+    setUploadError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSend = async (e: React.FormEvent) => {
@@ -107,8 +119,12 @@ export default function ChatPage() {
         if (res.ok) {
           const data = await res.json();
           uploadedImageUrl = data.url;
+        } else {
+          setUploadError('Image upload failed. Message sent without image.');
         }
-      } catch (e) { console.error('Failed to upload', e); }
+      } catch {
+        setUploadError('Image upload failed. Message sent without image.');
+      }
     }
 
     // Send via HTTP POST (reliable)
@@ -128,22 +144,15 @@ export default function ChatPage() {
 
       if (res.ok) {
         const savedMsg = await res.json();
-        // Add to messages immediately (optimistic)
         setMessages(prev => {
-          // Avoid duplicate if socket already delivered it
           if (prev.some(m => m.id === savedMsg.id)) return prev;
           return [...prev, savedMsg];
         });
-      } else {
-        console.error('Failed to send message');
       }
-    } catch (e) { 
-      console.error('Message send error:', e); 
-    }
+    } catch {}
 
     setNewMessage('');
-    setImageFile(null);
-    setImagePreview('');
+    clearImagePreview();
     setIsSending(false);
   };
 
@@ -164,7 +173,6 @@ export default function ChatPage() {
             </div>
             <div>
               <h1 className="font-bold text-gray-900 leading-tight">{receiverName || 'Loading...'}</h1>
-              <p className="text-xs text-green-500 font-medium">Online</p>
             </div>
           </div>
         </div>
@@ -172,7 +180,9 @@ export default function ChatPage() {
 
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
         <div className="text-center my-4">
-          <span className="text-xs font-medium text-gray-400 bg-gray-100 px-3 py-1 rounded-full uppercase tracking-wider">Today</span>
+          <span className="text-xs font-medium text-gray-400 bg-gray-100 px-3 py-1 rounded-full uppercase tracking-wider">
+            {new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
+          </span>
         </div>
         
         {messages.length === 0 && (
@@ -207,11 +217,18 @@ export default function ChatPage() {
       </main>
 
       <footer className="bg-white p-4 border-t border-gray-100 pb-safe relative">
+        {uploadError && (
+          <div className="mb-2 flex items-center space-x-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2 text-xs text-red-600">
+            <AlertCircle size={14} className="flex-shrink-0" />
+            <span>{uploadError}</span>
+            <button type="button" onClick={() => setUploadError('')} className="ml-auto"><X size={12} /></button>
+          </div>
+        )}
         {imagePreview && (
           <div className="absolute bottom-full left-0 right-0 bg-white p-3 border-t border-gray-100 flex items-center shadow-lg rounded-t-xl z-20">
              <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-gray-200">
                <img src={imagePreview} className="w-full h-full object-cover" />
-               <button onClick={() => {setImagePreview(''); setImageFile(null);}} className="absolute top-1 right-1 bg-black/60 rounded-full p-0.5 hover:bg-black/80 transition-colors" type="button">
+               <button onClick={clearImagePreview} className="absolute top-1 right-1 bg-black/60 rounded-full p-0.5 hover:bg-black/80 transition-colors" type="button">
                  <X size={12} className="text-white"/>
                </button>
              </div>
@@ -220,7 +237,7 @@ export default function ChatPage() {
         <form onSubmit={handleSend} className="flex items-center space-x-2">
           <label className="p-2 text-gray-400 hover:bg-gray-50 rounded-full cursor-pointer transition-colors relative">
             <Paperclip size={24} />
-            <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
           </label>
           <input
             type="text"

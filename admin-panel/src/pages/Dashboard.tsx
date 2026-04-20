@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import AdminLayout from '../components/AdminLayout';
-import { Users, Store, FileText, Star, Flag, TrendingUp, Clock, UserPlus } from 'lucide-react';
+import { Users, Store, FileText, Star, Flag, TrendingUp, Clock, UserPlus, Store as StoreIcon } from 'lucide-react';
 import api, { getAdminHeaders } from '../lib/api';
+
+interface RecentUser {
+  id: string; name: string; role: string; phone: string; createdAt: string;
+  kycStoreName?: string | null;
+  stores?: { storeName: string }[];
+}
 
 interface Stats {
   users: number;
@@ -9,11 +15,18 @@ interface Stats {
   posts: number;
   reviews: number;
   reports: number;
-  recentUsers: Array<{ id: string; name: string; role: string; phone: string; createdAt: string }>;
+  recentUsers: RecentUser[];
   recentReports: Array<{ id: string; reason: string; createdAt: string; reportedByUser: { name: string }; reportedUser?: { name: string }; reportedStore?: { storeName: string } }>;
 }
 
-
+// Helper: show business name for non-customers
+const displayName = (user: RecentUser) => {
+  if (user.role !== 'customer') {
+    const bName = user.stores && user.stores.length > 0 ? user.stores[0].storeName : (user.kycStoreName || user.name);
+    return bName;
+  }
+  return user.name;
+};
 
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -107,8 +120,13 @@ export default function Dashboard() {
                     <span className="text-xs font-semibold text-gray-600">{user.name[0]?.toUpperCase()}</span>
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{user.name}</p>
-                    <p className="text-xs text-gray-400">{user.phone}</p>
+                    <p className="text-sm font-medium text-gray-900 truncate">{displayName(user)}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-gray-400">{user.phone}</p>
+                      {user.role !== 'customer' && (
+                        <span className="text-xs text-indigo-500 flex items-center gap-0.5"><UserPlus size={10} />{user.name}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">

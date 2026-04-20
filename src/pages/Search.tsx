@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, ChevronRight } from 'lucide-react';
+import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, ChevronRight, Trash2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import NotificationBell from '../components/NotificationBell';
 import { useAuth } from '../context/AuthContext';
@@ -15,6 +15,50 @@ export default function SearchPage() {
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
   const navigate = useNavigate();
   const { token } = useAuth();
+  const [searchHistory, setSearchHistory] = useState<string[]>([]);
+
+  // Fetch search history on mount
+  useEffect(() => {
+    if (!token) return;
+    const fetchHistory = async () => {
+      try {
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        if (!user.id) return;
+        const res = await fetch(`/api/users/${user.id}/search-history`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const uniqueQueries = [...new Set(data.map((d: any) => d.query))] as string[];
+          setSearchHistory(uniqueQueries.slice(0, 8));
+        }
+      } catch {}
+    };
+    fetchHistory();
+  }, [token]);
+
+  // Save search to history
+  const saveSearch = (q: string) => {
+    if (!q.trim() || !token) return;
+    fetch('/api/search-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ query: q.trim() })
+    }).then(() => {
+      setSearchHistory(prev => {
+        const filtered = prev.filter(s => s.toLowerCase() !== q.trim().toLowerCase());
+        return [q.trim(), ...filtered].slice(0, 8);
+      });
+    }).catch(() => {});
+  };
+
+  const clearHistory = async () => {
+    if (!token) return;
+    try {
+      await fetch('/api/search-history', { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+      setSearchHistory([]);
+    } catch {}
+  };
 
   const categories = ['Electronics', 'Fashion', 'Home & Garden', 'Sports', 'Beauty', 'Groceries', 'General', 'Food', 'Vehicles', 'Jewellery', 'Entertainment', 'Health', 'Education', 'Services'];
 
@@ -36,16 +80,16 @@ export default function SearchPage() {
 
     const timer = setTimeout(() => {
       setLoading(true);
-      fetch(`/api/search?q=${encodeURIComponent(query)}`, {
+      saveSearch(query);
+      fetch(`/api/search/ai?q=${encodeURIComponent(query)}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
-        .then(res => res.json())
+        .then(res => res.ok ? res.json() : { products: [], stores: [] })
         .then(data => {
-          setResults(data);
+          setResults({ products: Array.isArray(data.products) ? data.products : [], stores: Array.isArray(data.stores) ? data.stores : [] });
           setLoading(false);
         })
-        .catch(err => {
-          console.error(err);
+        .catch(() => {
           setLoading(false);
         });
     }, 500);
@@ -101,7 +145,7 @@ export default function SearchPage() {
       }
     }
     if (store.is24Hours) return { open: true, label: 'Open 24 Hours' };
-    if (!store.openingTime || !store.closingTime) return { open: true, label: '' };
+    if (!store.openingTime || !store.closingTime) return { open: false, label: 'Hours not set' };
     const now = new Date();
     const [oh, om] = store.openingTime.split(':').map(Number);
     const [ch, cm] = store.closingTime.split(':').map(Number);
@@ -328,7 +372,31 @@ export default function SearchPage() {
             <p>No results found for "{query}"</p>
           </div>
         ) : (
-          <div className="py-10">
+          <div className="py-6">
+            {/* Recent Searches */}
+            {searchHistory.length > 0 && (
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Recent Searches</h2>
+                  <button onClick={clearHistory} className="text-xs text-red-500 font-medium flex items-center hover:text-red-600">
+                    <Trash2 size={12} className="mr-1" /> Clear
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {searchHistory.map((q, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setQuery(q)}
+                      className="bg-white px-4 py-2 rounded-full shadow-sm border border-gray-100 text-sm text-gray-700 hover:border-indigo-300 hover:text-indigo-600 transition-colors flex items-center"
+                    >
+                      <Clock size={12} className="mr-1.5 text-gray-400" />
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Popular Categories</h2>
             <div className="grid grid-cols-2 gap-3">
               {categories.map(cat => (

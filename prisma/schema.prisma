@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -40,6 +40,7 @@ model User {
   savedLocations   SavedLocation[]
   reportsMade      Report[] @relation("ReportsMade")
   reportsReceived  Report[] @relation("ReportsReceived")
+  complaints       Complaint[]
 }
 
 model Store {
@@ -78,6 +79,11 @@ model Store {
   manualProductText String?
   teamMembers   TeamMember[]
   reportsAgainst Report[] @relation("ReportedStores")
+
+  @@index([ownerId])
+  @@index([category])
+  @@index([latitude, longitude])
+  @@index([city])
 }
 
 model Follow {
@@ -90,6 +96,8 @@ model Follow {
   store     Store    @relation(fields: [storeId], references: [id])
 
   @@unique([userId, storeId])
+  @@index([storeId])
+  @@index([userId])
 }
 
 model Product {
@@ -108,6 +116,9 @@ model Product {
   reviews         Review[]
   averageRating   Float?
   reviewCount     Int      @default(0)
+
+  @@index([storeId])
+  @@index([category])
 }
 
 model Post {
@@ -125,6 +136,9 @@ model Post {
   createdAt  DateTime @default(now())
   expiryDate DateTime? // Set to 30 days from creation by default unless promoted
   likes      Like[]
+
+  @@index([storeId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
 }
 
 model Message {
@@ -136,6 +150,9 @@ model Message {
   message    String
   imageUrl   String?
   createdAt  DateTime @default(now())
+
+  @@index([senderId, receiverId, createdAt(sort: Asc)])
+  @@index([receiverId, createdAt(sort: Desc)])
 }
 
 model Category {
@@ -172,6 +189,9 @@ model Notification {
 
   userId      String
   user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model SavedItem {
@@ -183,6 +203,7 @@ model SavedItem {
   createdAt   DateTime @default(now())
 
   @@unique([userId, type, referenceId])
+  @@index([userId, type])
 }
 
 model SearchHistory {
@@ -191,6 +212,8 @@ model SearchHistory {
   user      User     @relation(fields: [userId], references: [id])
   query     String
   createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 model SavedLocation {
@@ -237,4 +260,28 @@ model Like {
   createdAt DateTime @default(now())
 
   @@unique([userId, postId])
+  @@index([postId])
+  @@index([userId])
+}
+
+model AppSettings {
+  id              String   @id @default("singleton")
+  appName         String   @default("Local Discoveries")
+  logoUrl         String?
+  primaryColor    String   @default("#4f46e5")
+  accentColor     String   @default("#6366f1")
+  carouselImages  String[] @default([])
+  updatedAt       DateTime @updatedAt
+}
+
+model Complaint {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  issueType   String   // "store_issue", "bug", "spam", "account", "other"
+  description String
+  status      String   @default("open") // "open", "in_progress", "resolved", "dismissed"
+  adminNotes  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

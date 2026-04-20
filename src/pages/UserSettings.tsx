@@ -98,8 +98,11 @@ export default function UserSettings() {
     if (!store) return;
     setLoadingPosts(true);
     try {
-      const res = await fetch(`/api/stores/${store.id}/posts`);
-      if (res.ok) setManagePosts(await res.json());
+      const res = await fetch(`/api/stores/${store.id}/posts?limit=100`);
+      if (res.ok) {
+        const data = await res.json();
+        setManagePosts(Array.isArray(data) ? data : (data.posts ?? []));
+      }
     } catch (e) { console.error(e); }
     setLoadingPosts(false);
   };
@@ -171,6 +174,7 @@ export default function UserSettings() {
 
   // Build tabs based on role
   const retailerTabs = [
+     { id: 'details', label: 'Sign-up Details', icon: User },
      { id: 'manage_posts', label: 'Manage Posts', icon: Layers },
      ...(isBusinessOwner ? [{ id: 'manage_team', label: 'Manage Team', icon: Users }] : []),
      { id: 'bulk_upload', label: 'Upload Bulk Products', icon: Upload },
@@ -366,19 +370,54 @@ export default function UserSettings() {
         {/* Active Tab Content */}
         {activeTab && (
           <div className="space-y-4">
+            {/* === SHARED TABS === */}
+            {activeTab === 'details' && (
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-4">
+                <h2 className="text-sm font-bold text-gray-900 mb-4">{isRetailer ? 'Edit Sign-up Details' : 'Edit Personal Details'}</h2>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Full Name</label>
+                    <input type="text" id="details-name" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all outline-none text-sm" defaultValue={user?.name || ''} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Phone Number</label>
+                    <input type="text" id="details-phone" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all outline-none text-sm" defaultValue={(user as any)?.phone || ''} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Email Address</label>
+                    <input type="email" id="details-email" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-sm" defaultValue={user?.email || ''} />
+                  </div>
+                  <button 
+                    className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 transition-colors mt-4"
+                    onClick={async () => {
+                      const name = (document.getElementById('details-name') as HTMLInputElement).value;
+                      const phone = (document.getElementById('details-phone') as HTMLInputElement).value;
+                      const email = (document.getElementById('details-email') as HTMLInputElement).value;
+                      try {
+                        const res = await fetch(`/api/users/${user?.id}`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                          body: JSON.stringify({ name, phone, email })
+                        });
+                        if (res.ok) {
+                          showToast('Details updated successfully!', { type: 'success' });
+                        } else {
+                          showToast('Failed to update details.', { type: 'error' });
+                        }
+                      } catch (e) {
+                         showToast('Error updating details.', { type: 'error' });
+                      }
+                    }}
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* === CUSTOMER TABS === */}
             {!isRetailer && (
               <>
-                {activeTab === 'details' && (
-                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-4">
-                    <h2 className="text-sm font-bold text-gray-900 mb-4">Edit Personal Details</h2>
-                    <div className="space-y-3">
-                      <div><label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Full Name</label><input type="text" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all outline-none text-sm" defaultValue={user?.name || ''} /></div>
-                      <div><label className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Email Address</label><input type="email" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none text-sm" defaultValue={user?.email || ''} disabled /></div>
-                      <button className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 transition-colors mt-4">Save Changes</button>
-                    </div>
-                  </div>
-                )}
                 {activeTab === 'following' && (
                   customerLoading ? <SkeletonList /> : followedStores.length > 0 ? (
                     <div className="space-y-2">
@@ -533,10 +572,16 @@ export default function UserSettings() {
                     {/* Team members list */}
                     <div>
                       <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-semibold text-gray-700">Team Members ({teamMembers.length})</h3>
-                        <button onClick={() => setShowAddMember(true)} className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg flex items-center hover:bg-indigo-100 transition-colors">
-                          <Plus size={14} className="mr-1" /> Add Member
-                        </button>
+                        <h3 className="text-sm font-semibold text-gray-700">
+                          Team Members ({teamMembers.length}/{3})
+                        </h3>
+                        {teamMembers.length < 3 ? (
+                          <button onClick={() => setShowAddMember(true)} className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg flex items-center hover:bg-indigo-100 transition-colors">
+                            <Plus size={14} className="mr-1" /> Add Member
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400 bg-gray-100 px-3 py-1.5 rounded-lg font-medium">Limit reached (3/3)</span>
+                        )}
                       </div>
 
                       {teamError && (
@@ -697,16 +742,58 @@ export default function UserSettings() {
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                     <AlertTriangle className="mx-auto h-12 w-12 text-red-400 mb-4" /><h3 className="font-bold text-gray-900 mb-2 text-center">Report Fake User</h3>
                     <p className="text-sm text-gray-500 mb-4 text-center">Report suspicious accounts or fraudulent activity.</p>
-                    <textarea className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-red-400 mb-3" rows={4} placeholder="Describe the issue..." />
-                    <button className="w-full bg-red-600 text-white py-2.5 rounded-xl font-medium hover:bg-red-700 transition-colors">Submit Report</button>
+                    <textarea id="report-text" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-red-400 mb-3" rows={4} placeholder="Describe the issue..." />
+                    <button
+                      className="w-full bg-red-600 text-white py-2.5 rounded-xl font-medium hover:bg-red-700 transition-colors"
+                      onClick={async () => {
+                        const description = (document.getElementById('report-text') as HTMLTextAreaElement)?.value?.trim();
+                        if (!description) { showToast('Please describe the issue.', { type: 'error' }); return; }
+                        try {
+                          const res = await fetch('/api/complaints', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify({ issueType: 'fake_user', description })
+                          });
+                          if (res.ok) {
+                            (document.getElementById('report-text') as HTMLTextAreaElement).value = '';
+                            showToast('Report submitted. We will review it shortly.', { type: 'success' });
+                          } else {
+                            showToast('Failed to submit report.', { type: 'error' });
+                          }
+                        } catch { showToast('Network error.', { type: 'error' }); }
+                      }}
+                    >
+                      Submit Report
+                    </button>
                   </div>
                 )}
                 {activeTab === 'help' && isBusinessOwner && (
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-center">
                     <HelpCircle className="mx-auto h-12 w-12 text-gray-400 mb-4" /><h3 className="font-bold text-gray-900 mb-2">Help & Feedback</h3>
                     <p className="text-sm text-gray-500 mb-4">Have questions? We'd love to hear from you.</p>
-                    <textarea className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-indigo-400 mb-3" rows={4} placeholder="Tell us what's on your mind..." />
-                    <button className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 transition-colors">Send Feedback</button>
+                    <textarea id="help-text" className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:border-indigo-400 mb-3" rows={4} placeholder="Tell us what's on your mind..." />
+                    <button
+                      className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 transition-colors"
+                      onClick={async () => {
+                        const description = (document.getElementById('help-text') as HTMLTextAreaElement)?.value?.trim();
+                        if (!description) { showToast('Please enter your message.', { type: 'error' }); return; }
+                        try {
+                          const res = await fetch('/api/complaints', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify({ issueType: 'feedback', description })
+                          });
+                          if (res.ok) {
+                            (document.getElementById('help-text') as HTMLTextAreaElement).value = '';
+                            showToast('Feedback sent! Thank you.', { type: 'success' });
+                          } else {
+                            showToast('Failed to send feedback.', { type: 'error' });
+                          }
+                        } catch { showToast('Network error.', { type: 'error' }); }
+                      }}
+                    >
+                      Send Feedback
+                    </button>
                   </div>
                 )}
               </>

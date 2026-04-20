@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import AdminLayout from '../components/AdminLayout';
-import { Search, ChevronLeft, ChevronRight, Trash2, Edit3, X, ShieldAlert, ShieldCheck, CheckSquare, Square } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Trash2, Edit3, X, ShieldAlert, ShieldCheck, CheckSquare, Square, Store as StoreIcon } from 'lucide-react';
 import api, { getAdminHeaders } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 
@@ -8,8 +8,13 @@ import { useToast } from '../context/ToastContext';
 const ROLES = ['all', 'customer', 'retailer', 'supplier', 'brand', 'manufacturer', 'admin'];
 
 interface User {
-  id: string; name: string; phone: string; email: string | null; role: string; createdAt: string; isBlocked: boolean;
+  id: string; name: string; phone: string; email: string | null; role: string; createdAt: string; isBlocked: boolean; kycStoreName?: string | null;
+  stores: { id: string; storeName: string; logoUrl: string | null }[];
 }
+
+const displayName = (u: User) => {
+  return u.name;
+};
 
 export default function Users() {
   const [users, setUsers] = useState<User[]>([]);
@@ -63,7 +68,7 @@ export default function Users() {
   const handleToggleBlock = async (user: User) => {
     try {
       await api.put(`/api/admin/users/${user.id}`, { isBlocked: !user.isBlocked }, { headers: getAdminHeaders() });
-      showToast(`User ${user.isBlocked ? 'unblocked' : 'blocked'} successfully`, { type: 'success' });
+      showToast(`${displayName(user)} ${user.isBlocked ? 'unblocked' : 'blocked'} successfully`, { type: 'success' });
       fetchUsers();
     } catch {
       showToast('Failed to change block status', { type: 'error' });
@@ -126,7 +131,7 @@ export default function Users() {
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <form onSubmit={handleSearch} className="flex-1 relative">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or phone..."
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, phone, or store name..."
             className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-300" />
         </form>
         <div className="flex gap-2">
@@ -165,6 +170,7 @@ export default function Users() {
                     </button>
                   </th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
+                  <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Business Name</th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Phone</th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
                   <th className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
@@ -185,8 +191,22 @@ export default function Users() {
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center ${u.isBlocked ? 'bg-red-100' : 'bg-indigo-50'}`}>
                           <span className={`text-xs font-bold ${u.isBlocked ? 'text-red-600' : 'text-indigo-600'}`}>{u.name[0]?.toUpperCase()}</span>
                         </div>
-                        <span className={`text-sm font-medium ${u.isBlocked ? 'text-red-900 line-through' : 'text-gray-900'}`}>{u.name}</span>
+                        <div>
+                          <span className={`text-sm font-medium ${u.isBlocked ? 'text-red-900 line-through' : 'text-gray-900'}`}>{displayName(u)}</span>
+                        </div>
                       </div>
+                    </td>
+                    <td className="px-5 py-3">
+                      {u.role !== 'customer' ? (
+                        <div className="flex items-center gap-2">
+                          <StoreIcon size={14} className="text-indigo-400" />
+                          <span className="text-sm text-indigo-700 font-medium">
+                            {u.stores && u.stores.length > 0 ? u.stores[0].storeName : (u.kycStoreName || u.name)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3 text-sm text-gray-600">{u.phone || '—'}</td>
                     <td className="px-5 py-3">
@@ -202,11 +222,11 @@ export default function Users() {
                     <td className="px-5 py-3 text-sm text-gray-500">{new Date(u.createdAt).toLocaleDateString()}</td>
                     <td className="px-5 py-3 text-right">
                       <div className="flex justify-end gap-1.5">
-                        <button onClick={() => handleToggleBlock(u)} className={`p-1.5 rounded-lg transition-colors ${u.isBlocked ? 'text-emerald-600 hover:bg-emerald-50' : 'text-orange-600 hover:bg-orange-50'}`} title={u.isBlocked ? 'Unblock' : 'Block'}>
+                        <button onClick={() => handleToggleBlock(u)} className={`p-1.5 rounded-lg transition-colors ${u.isBlocked ? 'text-emerald-600 hover:bg-emerald-50' : 'text-orange-600 hover:bg-orange-50'}`} title={u.isBlocked ? 'Unblock User' : 'Block User'}>
                           {u.isBlocked ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
                         </button>
                         <button onClick={() => { setEditUser(u); setEditRole(u.role); }} className="p-1.5 rounded-lg text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 transition-colors" title="Edit role"><Edit3 size={15} /></button>
-                        <button onClick={() => setDeleteConfirm(u.id)} className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete"><Trash2 size={15} /></button>
+                        <button onClick={() => setDeleteConfirm(u.id)} className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors" title="Delete user"><Trash2 size={15} /></button>
                       </div>
                     </td>
                   </tr>
@@ -228,8 +248,11 @@ export default function Users() {
                       <span className={`text-sm font-bold ${u.isBlocked ? 'text-red-600' : 'text-indigo-600'}`}>{u.name[0]?.toUpperCase()}</span>
                     </div>
                     <div>
-                      <p className={`text-sm font-medium ${u.isBlocked ? 'text-red-900 line-through' : 'text-gray-900'}`}>{u.name}</p>
+                      <p className={`text-sm font-medium ${u.isBlocked ? 'text-red-900 line-through' : 'text-gray-900'}`}>{displayName(u)}</p>
                       <p className="text-xs text-gray-400">{u.phone || '—'}</p>
+                      {u.stores && u.stores.length > 0 && (
+                        <p className="text-xs text-indigo-600 font-medium mt-0.5 flex items-center gap-1"><StoreIcon size={10} />{u.stores[0].storeName}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1">
@@ -240,11 +263,11 @@ export default function Users() {
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-50">
                   <span className="text-xs text-gray-400">Joined {new Date(u.createdAt).toLocaleDateString()}</span>
                   <div className="flex gap-1.5">
-                    <button onClick={() => handleToggleBlock(u)} className={`p-1.5 rounded-lg ${u.isBlocked ? 'bg-emerald-50 text-emerald-600' : 'bg-orange-50 text-orange-600'}`}>
+                    <button onClick={() => handleToggleBlock(u)} className={`p-1.5 rounded-lg ${u.isBlocked ? 'bg-emerald-50 text-emerald-600' : 'bg-orange-50 text-orange-600'}`} title={u.isBlocked ? 'Unblock User' : 'Block User'}>
                       {u.isBlocked ? <ShieldCheck size={16} /> : <ShieldAlert size={16} />}
                     </button>
-                    <button onClick={() => { setEditUser(u); setEditRole(u.role); }} className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600"><Edit3 size={15} /></button>
-                    <button onClick={() => setDeleteConfirm(u.id)} className="p-1.5 rounded-lg bg-red-50 text-red-600"><Trash2 size={15} /></button>
+                    <button onClick={() => { setEditUser(u); setEditRole(u.role); }} className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600" title="Edit role"><Edit3 size={15} /></button>
+                    <button onClick={() => setDeleteConfirm(u.id)} className="p-1.5 rounded-lg bg-red-50 text-red-600" title="Delete user"><Trash2 size={15} /></button>
                   </div>
                 </div>
               </div>
@@ -272,7 +295,7 @@ export default function Users() {
               <h3 className="font-semibold text-gray-900">Change Role</h3>
               <button onClick={() => setEditUser(null)} className="p-1 rounded-lg hover:bg-gray-100"><X size={18} /></button>
             </div>
-            <p className="text-sm text-gray-600 mb-3">Update role for <strong>{editUser.name}</strong></p>
+            <p className="text-sm text-gray-600 mb-3">Update role for <strong>{displayName(editUser)}</strong></p>
             <select value={editRole} onChange={e => setEditRole(e.target.value)} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm mb-4 capitalize">
               {ROLES.filter(r => r !== 'all').map(r => <option key={r} value={r}>{r}</option>)}
             </select>

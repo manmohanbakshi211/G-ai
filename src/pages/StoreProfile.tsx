@@ -4,39 +4,12 @@ import { MapPin, Phone, Clock, Calendar, MessageCircle, ArrowLeft, Navigation, U
 import StarRating from '../components/StarRating';
 import ReviewModal from '../components/ReviewModal';
 import NotificationBell from '../components/NotificationBell';
-
-// Helper: determine open/closed status from store times
-function getStoreStatus(openingTime?: string, closingTime?: string, is24Hours?: boolean, workingDays?: string) {
-  // Check working days first
-  if (workingDays) {
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const today = dayNames[new Date().getDay()];
-    if (!workingDays.includes(today)) {
-      return { isOpen: false, label: 'Closed Today' };
-    }
-  }
-  if (is24Hours) return { isOpen: true, label: 'Open 24 Hours' };
-  if (!openingTime || !closingTime) return null;
-  const now = new Date();
-  const [openH, openM] = openingTime.split(':').map(Number);
-  const [closeH, closeM] = closingTime.split(':').map(Number);
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const openMinutes = openH * 60 + openM;
-  const closeMinutes = closeH * 60 + closeM;
-  const isOpen = closeMinutes > openMinutes
-    ? nowMinutes >= openMinutes && nowMinutes < closeMinutes
-    : nowMinutes >= openMinutes || nowMinutes < closeMinutes;
-  const formatTime = (h: number, m: number) => {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const hr = h % 12 || 12;
-    return `${hr}:${String(m).padStart(2, '0')} ${ampm}`;
-  };
-  if (isOpen) return { isOpen: true, label: `Open · Closes at ${formatTime(closeH, closeM)}` };
-  return { isOpen: false, label: `Closed · Opens tomorrow at ${formatTime(openH, openM)}` };
-}
+import { getStoreStatus } from '../lib/storeUtils';
+import { useToast } from '../context/ToastContext';
 
 export default function StoreProfilePage() {
   const { id } = useParams();
+  const { showToast } = useToast();
   const [store, setStore] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
   const [posts, setPosts] = useState<any[]>([]);
@@ -49,10 +22,10 @@ export default function StoreProfilePage() {
   const [productSearch, setProductSearch] = useState('');
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
 
-  // Real current user context
   const userStr = localStorage.getItem('user');
   const currentUser = userStr ? JSON.parse(userStr) : null;
   const currentUserId = currentUser?.id || '';
+  const token = localStorage.getItem('token') || '';
   const currentUserRole = currentUser?.role || 'customer';
 
   const [interactions, setInteractions] = useState<{likedPostIds: string[], savedPostIds: string[], followedStoreIds: string[]}>({
@@ -60,45 +33,41 @@ export default function StoreProfilePage() {
   });
 
   useEffect(() => {
-    if (currentUserId) {
-      fetch(`/api/me/interactions`, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } })
-        .then(res => res.json())
-        .then(data => setInteractions(data))
-        .catch(console.error);
+    if (currentUserId && token) {
+      fetch(`/api/me/interactions`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(res => res.ok ? res.json() : null)
+        .then(data => { if (data) setInteractions(data); })
+        .catch(() => {});
     }
   }, [currentUserId]);
 
   const toggleLike = async (postId: string) => {
     const isLiked = interactions.likedPostIds.includes(postId);
     setInteractions(prev => ({ ...prev, likedPostIds: isLiked ? prev.likedPostIds.filter(id => id !== postId) : [...prev.likedPostIds, postId] }));
-    try { await fetch(`/api/posts/${postId}/like`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }); } catch (e) { console.error(e); }
+    try { await fetch(`/api/posts/${postId}/like`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (e) { console.error(e); }
   };
 
   const toggleSave = async (postId: string) => {
     const isSaved = interactions.savedPostIds.includes(postId);
     setInteractions(prev => ({ ...prev, savedPostIds: isSaved ? prev.savedPostIds.filter(id => id !== postId) : [...prev.savedPostIds, postId] }));
-    try { await fetch(`/api/posts/${postId}/save`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }); } catch (e) { console.error(e); }
+    try { await fetch(`/api/posts/${postId}/save`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (e) { console.error(e); }
   };
 
   const handleShare = async (post: any) => {
-    const shareData = {
-      title: store?.storeName || 'Check this out!',
-      text: post.caption || `See this post`,
-      url: window.location.origin + `/store/${store?.id}`
-    };
+    const url = `${window.location.origin}/store/${store?.id}`;
     try {
-      if (navigator.share) await navigator.share(shareData);
-      else { await navigator.clipboard.writeText(shareData.url); alert('Link copied to clipboard!'); }
+      if (navigator.share) await navigator.share({ title: store?.storeName, text: post.caption || '', url });
+      else { await navigator.clipboard.writeText(url); showToast('Link copied to clipboard!', { type: 'success' }); }
     } catch (e) {}
   };
 
   const getLikeCount = (post: any) => {
-    const baseCount = post.likes?.length || 0;
-    const initiallyLiked = post.likes?.some((l: any) => l.userId === currentUserId);
+    const total = post._count?.likes ?? post.likes?.length ?? 0;
+    const initiallyLiked = (post.likes?.length ?? 0) > 0;
     const currentlyLiked = interactions.likedPostIds.includes(post.id);
-    if (initiallyLiked && !currentlyLiked) return Math.max(0, baseCount - 1);
-    if (!initiallyLiked && currentlyLiked) return baseCount + 1;
-    return baseCount;
+    if (initiallyLiked && !currentlyLiked) return Math.max(0, total - 1);
+    if (!initiallyLiked && currentlyLiked) return total + 1;
+    return total;
   };
 
   useEffect(() => {
@@ -123,19 +92,18 @@ export default function StoreProfilePage() {
 
       const productsRes = await fetch(`/api/products?storeId=${id}`);
       const productsData = await productsRes.json();
-      setProducts(productsData);
+      setProducts(Array.isArray(productsData) ? productsData : (productsData.products ?? []));
 
       const postsRes = await fetch(`/api/stores/${id}/posts`);
       const postsData = await postsRes.json();
-      setPosts(postsData);
+      setPosts(Array.isArray(postsData) ? postsData : (postsData.posts ?? []));
 
       const reviewsRes = await fetch(`/api/reviews/store/${id}`);
       const reviewsData = await reviewsRes.json();
-      setReviews(reviewsData);
+      setReviews(Array.isArray(reviewsData) ? reviewsData : (reviewsData.reviews ?? []));
 
       setLoading(false);
-    } catch (err) {
-      console.error(err);
+    } catch {
       setLoading(false);
     }
   };
@@ -144,23 +112,21 @@ export default function StoreProfilePage() {
     try {
       const res = await fetch(`/api/stores/${id}/follow`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ userId: currentUserId })
       });
+      if (!res.ok) return;
       const data = await res.json();
-      setIsFollowing(data.following);
-      setFollowersCount(prev => data.following ? prev + 1 : prev - 1);
-    } catch (err) {
-      console.error(err);
-    }
+      if (typeof data.following === 'boolean') {
+        setIsFollowing(data.following);
+        setFollowersCount(prev => data.following ? prev + 1 : Math.max(0, prev - 1));
+      }
+    } catch {}
   };
 
-  const filteredProducts = products.filter(p => 
-    p.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
-    p.category.toLowerCase().includes(productSearch.toLowerCase())
+  const filteredProducts = products.filter(p =>
+    p.productName?.toLowerCase().includes(productSearch.toLowerCase()) ||
+    p.category?.toLowerCase().includes(productSearch.toLowerCase())
   );
 
   if (loading) {
@@ -325,7 +291,7 @@ export default function StoreProfilePage() {
               </>
             ) : (
               <>
-                <button 
+                <button
                   onClick={toggleFollow}
                   className={`flex-1 py-1.5 rounded-lg font-semibold text-sm flex items-center justify-center ${
                     isFollowing ? 'bg-gray-100 text-gray-900' : 'bg-indigo-600 text-white'
@@ -333,12 +299,14 @@ export default function StoreProfilePage() {
                 >
                   {isFollowing ? <><UserCheck size={16} className="mr-1.5" /> Following</> : <><UserPlus size={16} className="mr-1.5" /> Follow</>}
                 </button>
-                <Link 
-                  to={`/chat/${store.ownerId}`}
-                  className="flex-1 bg-gray-100 text-gray-900 py-1.5 rounded-lg font-semibold text-sm flex items-center justify-center"
-                >
-                  Message
-                </Link>
+                {store.chatEnabled !== false && (
+                  <Link
+                    to={`/chat/${store.ownerId}`}
+                    className="flex-1 bg-gray-100 text-gray-900 py-1.5 rounded-lg font-semibold text-sm flex items-center justify-center"
+                  >
+                    Message
+                  </Link>
+                )}
               </>
             )}
           </div>
@@ -390,7 +358,7 @@ export default function StoreProfilePage() {
                   )}
                   {post.product && (
                     <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded font-medium">
-                      ${post.product.price}
+                      ₹{Number(post.product.price).toLocaleString()}
                     </div>
                   )}
                 </div>
@@ -511,7 +479,7 @@ export default function StoreProfilePage() {
                       </div>
                       <div className="flex items-center space-x-4">
                         {post.product && (
-                          <span className="font-bold text-lg text-gray-900">${post.product.price.toFixed(2)}</span>
+                          <span className="font-bold text-lg text-gray-900">₹{Number(post.product.price).toLocaleString()}</span>
                         )}
                         {!post.product && post.price && (
                           <span className="font-bold text-lg text-gray-900">₹{post.price}</span>
@@ -536,13 +504,15 @@ export default function StoreProfilePage() {
                           </div>
                         </div>
                         <div className="flex space-x-2 mt-3">
-                          <Link 
-                            to={`/chat/${store.ownerId}`}
-                            className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium text-center"
-                          >
-                            Message Store
-                          </Link>
-                          <a 
+                          {!isOwner && store.chatEnabled !== false && (
+                            <Link
+                              to={`/chat/${store.ownerId}`}
+                              className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium text-center"
+                            >
+                              Message Store
+                            </Link>
+                          )}
+                          <a
                             href={store.latitude && store.longitude ? `https://www.google.com/maps/dir/?api=1&destination=${store.latitude},${store.longitude}` : '#'}
                             target="_blank"
                             rel="noopener noreferrer"

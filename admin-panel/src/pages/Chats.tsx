@@ -5,10 +5,18 @@ import api, { getAdminHeaders } from '../lib/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+interface ChatUser {
+  id: string;
+  name: string;
+  role: string;
+  kycStoreName?: string | null;
+  stores?: { storeName: string }[];
+}
+
 interface Chat {
   id: string;
-  user1: { id: string; name: string; role: string };
-  user2: { id: string; name: string; role: string };
+  user1: ChatUser;
+  user2: ChatUser;
   lastMessage: string;
   timestamp: string;
   count: number;
@@ -16,12 +24,28 @@ interface Chat {
 
 interface Message {
   id: string;
-  sender: { id: string; name: string };
-  receiver: { id: string; name: string };
+  sender: ChatUser;
+  receiver: ChatUser;
   message: string;
   imageUrl: string | null;
   createdAt: string;
 }
+
+// Helper: show business name for non-customers
+const chatDisplayName = (user: ChatUser) => {
+  if (user.role !== 'customer') {
+    return user.stores && user.stores.length > 0 ? user.stores[0].storeName : (user.kycStoreName || user.name);
+  }
+  return user.name;
+};
+
+const chatDisplayNameFull = (user: ChatUser) => {
+  if (user.role !== 'customer') {
+    const bName = user.stores && user.stores.length > 0 ? user.stores[0].storeName : (user.kycStoreName || user.name);
+    return bName !== user.name ? `${bName} (${user.name})` : bName;
+  }
+  return user.name;
+};
 
 export default function Chats() {
   const [chats, setChats] = useState<Chat[]>([]);
@@ -39,8 +63,7 @@ export default function Chats() {
     try {
       const res = await api.get('/api/admin/chats', { headers: getAdminHeaders() });
       setChats(res.data);
-    } catch (err) {
-      console.error(err);
+    } catch {
     } finally {
       setLoading(false);
     }
@@ -55,8 +78,7 @@ export default function Chats() {
         params: { u1: chat.user1.id, u2: chat.user2.id }
       });
       setHistory(res.data);
-    } catch (err) {
-      console.error(err);
+    } catch {
     } finally {
       setHistoryLoading(false);
     }
@@ -103,9 +125,11 @@ export default function Chats() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="text-sm font-bold text-gray-900 truncate max-w-[120px]">{chat.user1.name}</span>
+                      <span className="text-sm font-bold text-gray-900 truncate max-w-[120px]">{chatDisplayName(chat.user1)}</span>
+                      <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${roleBadge(chat.user1.role)}`}>{chat.user1.role}</span>
                       <span className="text-[10px] text-gray-300">↔</span>
-                      <span className="text-sm font-bold text-gray-900 truncate max-w-[120px]">{chat.user2.name}</span>
+                      <span className="text-sm font-bold text-gray-900 truncate max-w-[120px]">{chatDisplayName(chat.user2)}</span>
+                      <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-medium ${roleBadge(chat.user2.role)}`}>{chat.user2.role}</span>
                     </div>
                     <p className="text-xs text-gray-500 truncate mb-1.5">{chat.lastMessage}</p>
                     <div className="flex items-center gap-2 text-[10px] text-gray-400">
@@ -138,19 +162,19 @@ export default function Chats() {
                 <div className="flex items-center gap-4">
                   <div className="flex -space-x-3">
                     <div className="w-9 h-9 rounded-full bg-indigo-100 border-2 border-white flex items-center justify-center text-indigo-700 font-bold text-xs ring-1 ring-indigo-50">
-                      {selectedChat.user1.name[0]}
+                      {chatDisplayName(selectedChat.user1)[0]}
                     </div>
                     <div className="w-9 h-9 rounded-full bg-emerald-100 border-2 border-white flex items-center justify-center text-emerald-700 font-bold text-xs ring-1 ring-emerald-50">
-                      {selectedChat.user2.name[0]}
+                      {chatDisplayName(selectedChat.user2)[0]}
                     </div>
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-gray-900">{selectedChat.user1.name}</span>
+                      <span className="text-sm font-bold text-gray-900">{chatDisplayNameFull(selectedChat.user1)}</span>
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${roleBadge(selectedChat.user1.role)}`}>{selectedChat.user1.role}</span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-sm font-bold text-gray-900">{selectedChat.user2.name}</span>
+                      <span className="text-sm font-bold text-gray-900">{chatDisplayNameFull(selectedChat.user2)}</span>
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${roleBadge(selectedChat.user2.role)}`}>{selectedChat.user2.role}</span>
                     </div>
                   </div>
@@ -166,7 +190,8 @@ export default function Chats() {
                   history.map(msg => (
                     <div key={msg.id} className={`flex flex-col ${msg.sender.id === selectedChat.user1.id ? 'items-start' : 'items-end'}`}>
                       <div className="flex items-center gap-2 mb-1 px-1">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{msg.sender.name}</span>
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{chatDisplayName(msg.sender)}</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[8px] font-medium ${roleBadge(msg.sender.role || '')}`}>{msg.sender.role}</span>
                         <span className="text-[9px] text-gray-300">{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                       <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
@@ -176,8 +201,12 @@ export default function Chats() {
                       }`}>
                         {msg.message && <p className="leading-relaxed">{msg.message}</p>}
                         {msg.imageUrl && (
-                          <img src={`${API_BASE}${msg.imageUrl}`} alt="Attachment" className="mt-2 rounded-lg max-h-60 w-full object-cover border border-black/5 cursor-pointer hover:brightness-95 transition-all"
-                            onClick={() => window.open(`${API_BASE}${msg.imageUrl}`, '_blank')} />
+                          <img
+                            src={msg.imageUrl.startsWith('http') ? msg.imageUrl : `${API_BASE}${msg.imageUrl}`}
+                            alt="Attachment"
+                            className="mt-2 rounded-lg max-h-60 w-full object-cover border border-black/5 cursor-pointer hover:brightness-95 transition-all"
+                            onClick={() => window.open(msg.imageUrl!.startsWith('http') ? msg.imageUrl! : `${API_BASE}${msg.imageUrl}`, '_blank')}
+                          />
                         )}
                       </div>
                     </div>

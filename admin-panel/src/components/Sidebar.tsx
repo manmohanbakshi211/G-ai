@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Store, Flag, LogOut, X, Shield, ShieldCheck, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Users, Store, Flag, LogOut, X, Shield, ShieldCheck, MessageSquare, Settings, FileText, AlertTriangle, UserCheck } from 'lucide-react';
 
 interface SidebarProps {
   onClose?: () => void;
@@ -53,14 +53,28 @@ export default function Sidebar({ onClose }: SidebarProps) {
         <NavLink to="/stores" className={navClass} onClick={onClose}>
           <Store size={18} /> Stores
         </NavLink>
+        <NavLink to="/store-members" className={navClass} onClick={onClose}>
+          <UserCheck size={18} /> Store Members
+        </NavLink>
+        <NavLink to="/posts" className={navClass} onClick={onClose}>
+          <FileText size={18} /> Posts
+        </NavLink>
         <NavLink to="/reports" className={navClass} onClick={onClose}>
           <Flag size={18} /> Reports
+        </NavLink>
+        <NavLink to="/complaints" className={navClass} onClick={onClose}>
+          <AlertTriangle size={18} /> Complaints
         </NavLink>
         <NavLink to="/kyc" className={navClass} onClick={onClose}>
           <ShieldCheck size={18} /> KYC Review
         </NavLink>
         <NavLink to="/chats" className={navClass} onClick={onClose}>
           <MessageSquare size={18} /> Chat Monitoring
+        </NavLink>
+
+        <p className="px-4 text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2 mt-5">Configuration</p>
+        <NavLink to="/settings" className={navClass} onClick={onClose}>
+          <Settings size={18} /> App Settings
         </NavLink>
       </nav>
 

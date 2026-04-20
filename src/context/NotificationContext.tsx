@@ -39,24 +39,23 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    fetchNotifications();
-
     const token = localStorage.getItem('token');
     if (!token) return;
 
-    const newSocket = io('http://localhost:3000', {
+    fetchNotifications();
+
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin;
+    const newSocket = io(socketUrl, {
       auth: { token },
-      transports: ['websocket']
+      transports: ['websocket'],
     });
 
-    newSocket.on('connect', () => console.log('Notification Socket Connected'));
-    
     newSocket.on('newNotification', (notif: Notification) => {
       setNotifications(prev => [notif, ...prev]);
     });
 
     setSocket(newSocket);
-    
+
     return () => {
       newSocket.disconnect();
     };

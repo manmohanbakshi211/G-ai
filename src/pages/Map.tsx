@@ -113,10 +113,10 @@ export default function MapPage() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/stores')
-      .then((r) => r.json())
-      .then(setStores)
-      .catch(console.error);
+    fetch('/api/stores?limit=200')
+      .then(r => r.ok ? r.json() : { stores: [] })
+      .then(data => setStores(Array.isArray(data) ? data : (data.stores ?? [])))
+      .catch(() => setStores([]));
   }, []);
 
   const onLoad = useCallback((map: google.maps.Map) => {

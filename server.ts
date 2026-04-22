@@ -13,15 +13,17 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
+import helmet from "helmet";
 import compression from "compression";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { createClient } from "redis";
 import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 
-const JWT_SECRET = process.env.JWT_SECRET || "your-super-secret-jwt-key-change-this";
-if (JWT_SECRET === "your-super-secret-jwt-key-change-this") {
-  console.warn("WARNING: Using default JWT_SECRET. Please set JWT_SECRET in .env for production.");
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error("FATAL: JWT_SECRET must be set in .env and be at least 32 characters long.");
+  process.exit(1);
 }
 
 // Prisma with connection pooling sized for high concurrency
@@ -50,7 +52,7 @@ const subClient = pubClient.duplicate();
 
 Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
   io.adapter(createAdapter(pubClient, subClient));
-  console.log("Redis adapter attached to Socket.IO");
+  if (process.env.NODE_ENV !== 'production') console.log("Redis adapter attached to Socket.IO");
 }).catch(err => console.error("Redis connection error:", err));
 
 // Setup BullMQ for background jobs (using IORedis connection)
@@ -133,6 +135,9 @@ const teamMemberExists = async (teamMemberId: string): Promise<boolean> => {
   try { await pubClient.set(key, exists ? '1' : '0', { EX: TEAM_MEMBER_TTL }); } catch {}
   return exists;
 };
+
+// Security headers
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // Gzip/brotli all responses — especially large JSON feeds
 app.use(compression());
@@ -1511,7 +1516,7 @@ app.get("/api/search", authenticateToken, async (req, res) => {
   const searchCacheKey = `search:${userRole}:${searchStr.toLowerCase()}`;
   try {
     const cached = await pubClient.get(searchCacheKey);
-    if (cached) return res.json(JSON.parse(cached));
+    if (cached) return res.json(JSON.parse(cached as string));
   } catch {}
 
   let allowedRoles: string[] = [];
@@ -1742,7 +1747,7 @@ app.get("/api/posts", authenticateToken, async (req, res) => {
     const cacheKey = `feed:${userRole}:p${page}:l${limit}`;
     try {
       const cached = await pubClient.get(cacheKey);
-      if (cached) return res.json(JSON.parse(cached));
+      if (cached) return res.json(JSON.parse(cached as string));
     } catch {}
     // Store result after query (set below)
     (res as any)._feedCacheKey = cacheKey;
@@ -2363,8 +2368,14 @@ io.on("connection", (socket) => {
 });
 
 async function ensureAdminAccount() {
-  const ADMIN_PHONE = '8595572765';
-  const ADMIN_PASSWORD = '12345678';
+  const ADMIN_PHONE = process.env.ADMIN_PHONE;
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+
+  if (!ADMIN_PHONE || !ADMIN_PASSWORD) {
+    console.warn("WARNING: ADMIN_PHONE or ADMIN_PASSWORD not set in .env — skipping admin account seeding.");
+    return;
+  }
+
   const ADMIN_NAME = 'Mandeep';
 
   try {
@@ -2384,10 +2395,10 @@ async function ensureAdminAccount() {
     // If upsert by ID fails (fresh DB), upsert by phone
     try {
       const hashed = await bcrypt.hash(ADMIN_PASSWORD, 10);
-      const existing = await prisma.user.findUnique({ where: { phone: '8595572765' } });
+      const existing = await prisma.user.findUnique({ where: { phone: ADMIN_PHONE } });
       if (existing) {
         await prisma.user.update({
-          where: { phone: '8595572765' },
+          where: { phone: ADMIN_PHONE },
           data: { role: 'admin', isBlocked: false, name: ADMIN_NAME },
         });
       } else {

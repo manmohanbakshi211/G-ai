@@ -6,6 +6,58 @@
 
 ---
 
+## 2026-04-22 — Session 3 (Phase 1 security cleanup)
+
+### Commit: TBD — security: phase 1 hardening
+
+#### JWT_SECRET hardening
+**File:** `server.ts`
+- Removed fallback string `"your-super-secret-jwt-key-change-this"`
+- If `JWT_SECRET` is missing from env or shorter than 32 characters, server now logs a fatal error and calls `process.exit(1)` immediately
+- **Reason:** A hardcoded fallback secret means all deployments that forget to set the env var silently use the same predictable key, making JWTs forgeable
+
+#### Admin credentials moved to environment variables
+**File:** `server.ts` (`ensureAdminAccount()`)
+- Removed hardcoded `ADMIN_PHONE = '8595572765'` and `ADMIN_PASSWORD = '12345678'`
+- Now reads `process.env.ADMIN_PHONE` and `process.env.ADMIN_PASSWORD`
+- If either is missing, logs a warning and skips seeding (no crash)
+- Fallback phone string in catch block also updated to use the env var
+- **Reason:** Hardcoded credentials in source code are visible to anyone with repo access
+
+**File:** `.env.example`
+- Added `ADMIN_PHONE=""` and `ADMIN_PASSWORD=""` entries with explanatory comments
+
+#### Helmet security headers added
+**File:** `server.ts`
+- Installed `helmet` package
+- Added `app.use(helmet({ contentSecurityPolicy: false }))` before `compression()` middleware
+- `contentSecurityPolicy` disabled because CSP is already handled by Nginx in production
+- **Reason:** Helmet sets ~14 HTTP security headers (X-Frame-Options, HSTS, X-Content-Type-Options, etc.) with one line
+
+#### console.log gated behind NODE_ENV
+**File:** `server.ts`
+- Wrapped Redis adapter connection log in `if (process.env.NODE_ENV !== 'production')`
+- Startup log (`Server running on...`) and all `console.error` calls left unchanged
+- **Reason:** Verbose connection logs add noise in production log aggregators
+
+#### seed.ts production warning
+**File:** `seed.ts`
+- Added comment at top: `// WARNING: Test data only. Do NOT run this script in production — it deletes all data.`
+- **Reason:** Script starts by deleting all users, posts, stores — running it in production would be catastrophic
+
+#### APP_DOCUMENTATION.md updated
+**File:** `APP_DOCUMENTATION.md`
+- Removed "Admin Credentials" section entirely (no credentials in docs)
+- Added `ADMIN_PHONE` and `ADMIN_PASSWORD` to the Environment Variables section
+- Added `helmet` row to the Backend tech stack table
+
+#### Pre-existing TypeScript errors fixed
+**File:** `server.ts`
+- Added `as string` cast to two `JSON.parse(cached)` calls (Redis `get()` returns `string | Buffer` in types; we already check `if (cached)` so cast is safe)
+- `npx tsc --noEmit` now passes cleanly
+
+---
+
 ## 2026-04-21 — Session 2 (Google removal + documentation)
 
 ### Commit: a1dcb23 — chore: remove Google sign-up/login temporarily

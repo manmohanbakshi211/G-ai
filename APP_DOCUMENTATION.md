@@ -21,7 +21,6 @@
 13. [Background Jobs (BullMQ)](#background-jobs-bullmq)
 14. [Environment Variables](#environment-variables)
 15. [Deployment](#deployment)
-16. [Admin Credentials](#admin-credentials)
 
 ---
 
@@ -51,6 +50,7 @@ Both share a single **Express + TypeScript backend** (`server.ts`).
 | Background Jobs | BullMQ 5 (Redis-backed queue) |
 | Auth | JWT (jsonwebtoken) + bcrypt |
 | File Uploads | Multer (local disk) or Multer-S3 (AWS S3) |
+| Security Headers | `helmet` |
 | Compression | `compression` (gzip/brotli) |
 | Rate Limiting | `express-rate-limit` + Redis store |
 | Process Manager | PM2 (cluster mode, all CPU cores) |
@@ -397,7 +397,11 @@ Create a `.env` file in the project root:
 # Required
 DATABASE_URL=postgresql://g_ai_user:PASSWORD@localhost:5432/g_ai
 REDIS_URL=redis://localhost:6379
-JWT_SECRET=your-long-random-secret-here
+JWT_SECRET=your-long-random-secret-here-minimum-32-chars
+
+# Admin account seeding — both required for admin account to be created on startup
+ADMIN_PHONE=your-admin-phone-number
+ADMIN_PASSWORD=your-admin-password
 
 # Optional
 NODE_ENV=production
@@ -442,19 +446,4 @@ The script installs: Node.js 22, PostgreSQL 14, Redis, Nginx, Certbot (SSL), PM2
 
 ---
 
-## Admin Credentials
-
-The admin account is **auto-seeded on every server start** via `ensureAdminAccount()`:
-
-| Field | Value |
-|---|---|
-| Phone | `8595572765` |
-| Password | `12345678` |
-| Name | Mandeep |
-| Role | admin |
-
-This account **cannot be blocked, deleted, or modified** — it is protected by a `PROTECTED_ADMIN_ID` constant in `server.ts`. Any attempt to modify it via admin panel API routes is rejected with 403.
-
----
-
-*Last updated: 2026-04-21*
+*Last updated: 2026-04-22*

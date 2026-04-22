@@ -1,3 +1,4 @@
+// WARNING: Test data only. Do NOT run this script in production — it deletes all data.
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcrypt';
 

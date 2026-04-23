@@ -6,6 +6,44 @@
 
 ---
 
+## 2026-04-23 — Session 5 (UI redesign phase 1 — tokens, home, search)
+
+### Commit: TBD — ui: premium redesign phase 1 (home + search)
+
+#### src/index.css
+- Added Dukanchi design token CSS variables (`--dk-bg`, `--dk-accent`, `--dk-surface`, etc.)
+
+#### src/components/DukanchiLogo.tsx (new)
+- 34×34 rounded square with `linear-gradient(135deg, #FF6B35, #FFA94D)`, Devanagari "द" in white
+
+#### src/components/AppHeader.tsx (new)
+- Sticky-ready header: DukanchiLogo + "Dukanchi / apna bazaar, apni dukaan" stacked text + NotificationBell
+
+#### src/components/BottomNav.tsx (new)
+- Extracted from App.tsx; 5 tabs (Home, Search, Map, Chat, Profile); active = filled orange, inactive = stroke gray
+- Messages tab label changed to "Chat"
+
+#### src/App.tsx
+- Removed inline BottomNav; imports new BottomNav component; background uses `--dk-bg`
+
+#### src/pages/Home.tsx
+- Replaced header with AppHeader + LocationBar ("Showing stores near your area" + Change button)
+- Tabs: For you / Following / Saved — dark pill active, transparent inactive
+- Removed carousel banner entirely
+- Post card: 38px orange-bordered circular avatar, open/distance/category status row, 4:5 black-bg contain image canvas, caption first-sentence-bold, orange Follow pill
+- Action bar: Heart+count, Chat, Share2, spacer, Bookmark — no directions button
+- Added geolocation + distance calculation for post card status row
+
+#### src/pages/Search.tsx
+- Header replaced with AppHeader; big heading "Kya dhoondh rahe ho?"
+- New search input: `--dk-surface` bg, radius 14px, mic icon (orange, TODO)
+- Trending near you: 4 chips (🔥 PS5, iPhone 15, perfumes, earbuds)
+- Browse by category: 8-tile 4-col grid with emoji, colored bg/text per spec
+- Recent searches: list with clock icon + per-item ✕ remove
+- Results view preserved with Dukanchi design tokens
+
+---
+
 ## 2026-04-22 — Session 4 (Phase 2 Zod validation)
 
 ### Commit: TBD — security: phase 2 zod input validation

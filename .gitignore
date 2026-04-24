@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+uploads/
+test.js
+test-postgres.mjs
+.claude/

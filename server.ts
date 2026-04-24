@@ -22,6 +22,8 @@ import IORedis from "ioredis";
 import { validate } from './validators/validate';
 import { expandQuery } from './src/services/aliasDictionary';
 import { generateEmbedding } from './src/services/geminiEmbeddings';
+import { refreshVocabulary, correctSpelling, getSuggestions } from './src/services/fuzzySearch';
+import { inferCategory } from './src/services/categoryInference';
 import {
   signupSchema, loginSchema,
   createPostSchema, updatePostSchema,
@@ -1689,10 +1691,16 @@ app.get("/api/search", authenticateToken, async (req, res) => {
       ]
     }));
 
+    // Category-aware filtering
+    const detectedCategory = inferCategory(searchStr);
+    const storeCatFilter: any = detectedCategory
+      ? { category: { contains: detectedCategory.split(' ')[0], mode: 'insensitive' as const } }
+      : {};
+
     let [products, stores] = await Promise.all([
       prisma.product.findMany({
         where: {
-          store: { owner: { role: { in: allowedRoles } } },
+          store: { owner: { role: { in: allowedRoles } }, ...storeCatFilter },
           OR: searchConditions,
         },
         select: {
@@ -1774,6 +1782,15 @@ app.get("/api/search", authenticateToken, async (req, res) => {
   }
 });
 
+// Autocomplete suggestions endpoint
+app.get("/api/search/suggestions", authenticateToken, async (req, res) => {
+  const { q } = req.query;
+  if (!q || String(q).trim().length < 1) return res.json({ suggestions: [] });
+  await refreshVocabulary(prisma);
+  const suggestions = getSuggestions(String(q).trim());
+  res.json({ suggestions });
+});
+
 // AI-powered search — Gemini reformulates the query into structured keywords + optional category
 app.get("/api/search/ai", authenticateToken, async (req, res) => {
   const { q } = req.query;
@@ -1788,7 +1805,13 @@ app.get("/api/search/ai", authenticateToken, async (req, res) => {
 
   let searchStr = String(q).trim();
 
+  // Fuzzy spell correction
+  const { corrected, didCorrect } = correctSpelling(searchStr);
+  const correctedQuery = didCorrect ? corrected : null;
+  if (didCorrect) searchStr = corrected;
+
   // Use Gemini to extract a clean search query from natural language
+  let detectedCategory: string | null = null;
   if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY') {
     try {
       const geminiRes = await fetch(
@@ -1813,6 +1836,7 @@ app.get("/api/search/ai", authenticateToken, async (req, res) => {
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
           if (parsed.keywords) searchStr = parsed.keywords;
+          if (parsed.category && parsed.category !== 'General') detectedCategory = parsed.category;
         }
       }
     } catch (e) {
@@ -1820,11 +1844,24 @@ app.get("/api/search/ai", authenticateToken, async (req, res) => {
     }
   }
 
+  // Local category inference fallback
+  if (!detectedCategory) {
+    detectedCategory = inferCategory(searchStr);
+  }
+
+  // Build category-aware store filter
+  const storeCategoryFilter: any = detectedCategory
+    ? { category: { contains: detectedCategory.split(' ')[0], mode: 'insensitive' } }
+    : {};
+
   try {
     const [products, stores] = await Promise.all([
       prisma.product.findMany({
         where: {
-          store: { owner: { role: { in: allowedRoles } } },
+          store: {
+            owner: { role: { in: allowedRoles } },
+            ...storeCategoryFilter,
+          },
           OR: [
             { productName: { contains: searchStr, mode: 'insensitive' } },
             { brand: { contains: searchStr, mode: 'insensitive' } },
@@ -1842,6 +1879,7 @@ app.get("/api/search/ai", authenticateToken, async (req, res) => {
       prisma.store.findMany({
         where: {
           owner: { role: { in: allowedRoles } },
+          ...storeCategoryFilter,
           OR: [
             { storeName: { contains: searchStr, mode: 'insensitive' } },
             { category: { contains: searchStr, mode: 'insensitive' } },
@@ -1856,7 +1894,45 @@ app.get("/api/search/ai", authenticateToken, async (req, res) => {
         orderBy: { averageRating: 'desc' },
       }),
     ]);
-    res.json({ products, stores, query: searchStr });
+
+    // If category filtering gave 0 results, retry without it
+    if (products.length === 0 && stores.length === 0 && detectedCategory) {
+      const [fallbackProducts, fallbackStores] = await Promise.all([
+        prisma.product.findMany({
+          where: {
+            store: { owner: { role: { in: allowedRoles } } },
+            OR: [
+              { productName: { contains: searchStr, mode: 'insensitive' } },
+              { brand: { contains: searchStr, mode: 'insensitive' } },
+              { category: { contains: searchStr, mode: 'insensitive' } },
+              { description: { contains: searchStr, mode: 'insensitive' } },
+            ],
+          },
+          select: {
+            id: true, productName: true, brand: true, category: true, price: true,
+            storeId: true, store: { select: { id: true, storeName: true, logoUrl: true } },
+          },
+          take: 20,
+          orderBy: { createdAt: 'desc' },
+        }),
+        prisma.store.findMany({
+          where: {
+            owner: { role: { in: allowedRoles } },
+            OR: [
+              { storeName: { contains: searchStr, mode: 'insensitive' } },
+              { category: { contains: searchStr, mode: 'insensitive' } },
+              { description: { contains: searchStr, mode: 'insensitive' } },
+            ],
+          },
+          include: { owner: { select: { role: true } } },
+          take: 20,
+          orderBy: { averageRating: 'desc' },
+        }),
+      ]);
+      return res.json({ products: fallbackProducts, stores: fallbackStores, query: searchStr, correctedQuery, detectedCategory });
+    }
+
+    res.json({ products, stores, query: searchStr, correctedQuery, detectedCategory });
   } catch (error) {
     console.error("AI search error:", error);
     res.status(500).json({ error: "Failed to perform search" });
@@ -2627,6 +2703,10 @@ async function startServer() {
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // Build fuzzy search vocabulary on startup
+    refreshVocabulary(prisma).then(() => console.log('Fuzzy vocabulary loaded')).catch(() => {});
+    // Refresh every 5 minutes
+    setInterval(() => refreshVocabulary(prisma).catch(() => {}), 5 * 60 * 1000);
   });
 }
 

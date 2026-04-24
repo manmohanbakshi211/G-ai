@@ -365,137 +365,98 @@ export default function MapPage() {
           </div>
         )}
 
-        {/* ── Stores near you (expandable list) ── */}
+        {/* ── Bottom sheet: Stores near you (expands UPWARD) ── */}
         {validStores.length > 0 && (
-          <div className="mt-4 px-4">
-            {/* Header row — tap to expand/collapse */}
-            <button
-              onClick={() => setListExpanded(!listExpanded)}
-              className="w-full flex items-center justify-between py-3 px-4 rounded-2xl"
-              style={{ background: 'white', border: '0.5px solid var(--dk-border)' }}
-            >
-              <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--dk-text-primary)' }}>
-                Stores near you ·{' '}
-                <span style={{ color: 'var(--dk-accent)' }}>{validStores.length}</span>
-              </p>
-              {listExpanded
-                ? <ChevronUp size={16} style={{ color: 'var(--dk-text-tertiary)' }} />
-                : <ChevronDown size={16} style={{ color: 'var(--dk-text-tertiary)' }} />
-              }
-            </button>
-
-            {/* Collapsed: horizontal quick scroll */}
-            {!listExpanded && (
-              <div className="flex gap-3 overflow-x-auto mt-3 pb-2" style={{ scrollbarWidth: 'none' }}>
-                {validStores.slice(0, 8).map(store => {
-                  const dist = userLocation ? getDistance(userLocation.lat, userLocation.lng, store.latitude, store.longitude) : null;
-                  const sStatus = getStoreStatus(store.openingTime, store.closingTime, store.is24Hours, store.workingDays);
-                  return (
-                    <button
-                      key={store.id}
-                      onClick={() => flyToStore(store)}
-                      className="flex-shrink-0 text-left overflow-hidden"
-                      style={{ width: 130, background: 'white', borderRadius: 14, border: selectedStore?.id === store.id ? '1.5px solid var(--dk-accent)' : '0.5px solid var(--dk-border)' }}
-                    >
-                      <div style={{ width: '100%', height: 72, background: 'var(--dk-surface)', position: 'relative' }}>
-                        {store.logoUrl
-                          ? <img src={store.logoUrl} className="w-full h-full object-cover" alt={store.storeName} />
-                          : <div className="w-full h-full flex items-center justify-center" style={{ fontSize: 26 }}>🏪</div>
-                        }
-                        {sStatus && (
-                          <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded-full" style={{ background: sStatus.isOpen ? '#10B981' : '#EF4444', fontSize: 9, fontWeight: 700, color: 'white' }}>
-                            {sStatus.isOpen ? 'Open' : 'Closed'}
-                          </div>
-                        )}
-                      </div>
-                      <div className="p-2">
-                        <p className="truncate font-semibold" style={{ fontSize: 11, color: '#1A1A1A' }}>{store.storeName}</p>
-                        {store.category && <p style={{ fontSize: 10, color: 'var(--dk-accent)', fontWeight: 600, marginTop: 1 }}>{store.category}</p>}
-                        {dist && <p style={{ fontSize: 10, color: 'var(--dk-text-tertiary)', marginTop: 2 }}>{dist}</p>}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Expanded: full vertical list ordered nearest → farthest */}
-            {listExpanded && (
-              <div className="mt-3 space-y-2">
-                {validStores.map((store, idx) => {
-                  const dist = userLocation ? getDistance(userLocation.lat, userLocation.lng, store.latitude, store.longitude) : null;
-                  const sStatus = getStoreStatus(store.openingTime, store.closingTime, store.is24Hours, store.workingDays);
-                  return (
-                    <div
-                      key={store.id}
-                      className="rounded-2xl overflow-hidden"
-                      style={{ background: 'white', border: selectedStore?.id === store.id ? '1.5px solid var(--dk-accent)' : '0.5px solid var(--dk-border)' }}
-                    >
-                      <button
-                        onClick={() => { flyToStore(store); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                        className="w-full text-left p-3"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="flex-shrink-0 overflow-hidden" style={{ width: 52, height: 52, borderRadius: 12, background: 'var(--dk-surface)' }}>
-                            {store.logoUrl
-                              ? <img src={store.logoUrl} className="w-full h-full object-cover" alt={store.storeName} />
-                              : <div className="w-full h-full flex items-center justify-center" style={{ fontSize: 22 }}>🏪</div>
-                            }
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="font-semibold truncate" style={{ fontSize: 14, color: '#1A1A1A' }}>{store.storeName}</p>
-                              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--dk-text-tertiary)', flexShrink: 0 }}>#{idx + 1}</span>
-                            </div>
-                            {store.category && <p style={{ fontSize: 11, color: 'var(--dk-accent)', fontWeight: 600, marginTop: 1 }}>{store.category}</p>}
-                            <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-                              {dist && (
-                                <div className="flex items-center gap-1">
-                                  <MapPin size={11} style={{ color: 'var(--dk-accent)' }} />
-                                  <span style={{ fontSize: 11, color: 'var(--dk-text-secondary)' }}>{dist}</span>
+          <div
+            className="px-4"
+            style={{
+              position: 'fixed',
+              bottom: 72,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '100%',
+              maxWidth: 448,
+              zIndex: 30,
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{ pointerEvents: 'auto' }}>
+              {/* ── Expanded: header on top, white bg, scrollable list ── */}
+              {listExpanded && (
+                <div style={{ background: 'white', borderRadius: 20, border: '0.5px solid var(--dk-border)', boxShadow: '0 -4px 24px rgba(0,0,0,0.12)', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '55vh', marginBottom: 8 }}>
+                  {/* Header — pinned at top */}
+                  <button onClick={() => setListExpanded(false)} className="w-full flex items-center justify-between py-3 px-4 flex-shrink-0" style={{ borderBottom: '0.5px solid var(--dk-border)' }}>
+                    <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--dk-text-primary)' }}>Stores near you · <span style={{ color: 'var(--dk-accent)' }}>{validStores.length}</span></p>
+                    <ChevronDown size={16} style={{ color: 'var(--dk-text-tertiary)' }} />
+                  </button>
+                  {/* Scrollable list */}
+                  <div className="overflow-y-auto overscroll-contain" style={{ scrollbarWidth: 'thin', padding: '8px 12px' }}>
+                    <div className="space-y-2">
+                      {validStores.map((store) => {
+                        const dist = userLocation ? getDistance(userLocation.lat, userLocation.lng, store.latitude, store.longitude) : null;
+                        const sStatus = getStoreStatus(store.openingTime, store.closingTime, store.is24Hours, store.workingDays);
+                        return (
+                          <div key={store.id} className="rounded-2xl overflow-hidden" style={{ background: 'var(--dk-bg)', border: selectedStore?.id === store.id ? '1.5px solid var(--dk-accent)' : '0.5px solid var(--dk-border)' }}>
+                            <button onClick={() => { flyToStore(store); setListExpanded(false); }} className="w-full text-left p-3">
+                              <div className="flex items-center gap-3">
+                                <div className="flex-shrink-0 overflow-hidden" style={{ width: 48, height: 48, borderRadius: 12, background: 'var(--dk-surface)' }}>
+                                  {store.logoUrl ? <img src={store.logoUrl} className="w-full h-full object-cover" alt={store.storeName} /> : <div className="w-full h-full flex items-center justify-center" style={{ fontSize: 20 }}>🏪</div>}
                                 </div>
-                              )}
-                              {sStatus && (
-                                <span style={{ fontSize: 11, fontWeight: 600, color: sStatus.isOpen ? '#10B981' : '#EF4444' }}>
-                                  ● {sStatus.isOpen ? 'Open' : 'Closed'}
-                                </span>
-                              )}
-                              {store.phone && (
-                                <div className="flex items-center gap-1">
-                                  <Phone size={11} style={{ color: 'var(--dk-text-tertiary)' }} />
-                                  <span style={{ fontSize: 11, color: 'var(--dk-text-tertiary)' }}>{store.phone}</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-semibold truncate" style={{ fontSize: 14, color: '#1A1A1A' }}>{store.storeName}</p>
+                                  {store.category && <p style={{ fontSize: 11, color: 'var(--dk-accent)', fontWeight: 600, marginTop: 1 }}>{store.category}</p>}
+                                  <div className="flex items-center gap-3 mt-1">
+                                    {dist && <div className="flex items-center gap-1"><MapPin size={11} style={{ color: 'var(--dk-accent)' }} /><span style={{ fontSize: 11, color: 'var(--dk-text-secondary)' }}>{dist}</span></div>}
+                                    {sStatus && <span style={{ fontSize: 11, fontWeight: 600, color: sStatus.isOpen ? '#10B981' : '#EF4444' }}>● {sStatus.isOpen ? 'Open' : 'Closed'}</span>}
+                                  </div>
                                 </div>
-                              )}
+                              </div>
+                            </button>
+                            <div className="flex gap-2 px-3 pb-3">
+                              <Link to={`/store/${store.id}`} className="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-semibold" style={{ background: 'white', color: '#1A1A1A', border: '0.5px solid var(--dk-border)' }}><Store size={12} /> View Store</Link>
+                              <a href={store.latitude && store.longitude ? `https://www.google.com/maps/dir/?api=1&destination=${store.latitude},${store.longitude}` : '#'} target="_blank" rel="noopener noreferrer" className="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-semibold" style={{ background: '#1A1A1A', color: 'white' }}><Navigation size={12} /> Navigate</a>
                             </div>
-                            {store.address && (
-                              <p className="truncate mt-1" style={{ fontSize: 11, color: 'var(--dk-text-tertiary)' }}>{store.address}</p>
-                            )}
                           </div>
-                        </div>
-                      </button>
-                      <div className="flex gap-2 px-3 pb-3">
-                        <Link
-                          to={`/store/${store.id}`}
-                          className="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-semibold"
-                          style={{ background: 'var(--dk-surface)', color: '#1A1A1A', border: '0.5px solid var(--dk-border)' }}
-                        >
-                          <Store size={12} /> View Store
-                        </Link>
-                        <a
-                          href={store.latitude && store.longitude ? `https://www.google.com/maps/dir/?api=1&destination=${store.latitude},${store.longitude}` : '#'}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-semibold"
-                          style={{ background: '#1A1A1A', color: 'white' }}
-                        >
-                          <Navigation size={12} /> Navigate
-                        </a>
-                      </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Collapsed: header + horizontal cards ── */}
+              {!listExpanded && (
+                <div style={{ background: 'white', borderRadius: 20, border: '0.5px solid var(--dk-border)', boxShadow: '0 -2px 16px rgba(0,0,0,0.10)', overflow: 'hidden' }}>
+                  <button onClick={() => setListExpanded(true)} className="w-full flex items-center justify-between py-3 px-4" style={{ borderBottom: '0.5px solid var(--dk-border)' }}>
+                    <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--dk-text-primary)' }}>Stores near you · <span style={{ color: 'var(--dk-accent)' }}>{validStores.length}</span></p>
+                    <span style={{ fontSize: 11, color: 'var(--dk-text-tertiary)' }}>▲ Swipe up</span>
+                  </button>
+
+                  <div className="flex gap-3 overflow-x-auto py-3 px-3" style={{ scrollbarWidth: 'none' }}>
+                    {validStores.slice(0, 8).map(store => {
+                      const dist = userLocation ? getDistance(userLocation.lat, userLocation.lng, store.latitude, store.longitude) : null;
+                      const sStatus = getStoreStatus(store.openingTime, store.closingTime, store.is24Hours, store.workingDays);
+                      const catChip = CATEGORY_CHIPS.find(c => c.value && store.category?.toLowerCase().includes(c.value.toLowerCase()));
+                      return (
+                        <button key={store.id} onClick={() => flyToStore(store)} className="flex-shrink-0 text-left overflow-hidden" style={{ width: 145, background: 'var(--dk-bg)', borderRadius: 14, border: selectedStore?.id === store.id ? '1.5px solid var(--dk-accent)' : '0.5px solid var(--dk-border)' }}>
+                          <div style={{ width: '100%', height: 56, background: 'var(--dk-surface)', position: 'relative', borderRadius: '14px 14px 0 0', overflow: 'hidden' }}>
+                            {store.logoUrl ? <img src={store.logoUrl} className="w-full h-full object-cover" alt={store.storeName} /> : <div className="w-full h-full flex items-center justify-center" style={{ fontSize: 24 }}>🏪</div>}
+                          </div>
+                          <div className="px-2.5 py-2">
+                            <p className="truncate font-bold" style={{ fontSize: 12, color: '#1A1A1A' }}>{store.storeName}</p>
+                            <div className="flex items-center gap-1 mt-1">
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: sStatus?.isOpen ? '#10B981' : '#EF4444', flexShrink: 0 }} />
+                              <span style={{ fontSize: 10, fontWeight: 600, color: sStatus?.isOpen ? '#10B981' : '#EF4444' }}>{sStatus?.isOpen ? 'Open now' : 'Closed'}</span>
+                            </div>
+                            <p style={{ fontSize: 10, color: 'var(--dk-text-tertiary)', marginTop: 2 }}>{dist}{catChip ? ` · ${catChip.emoji} ${store.category}` : ''}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

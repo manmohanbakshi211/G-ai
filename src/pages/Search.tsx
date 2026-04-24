@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, Mic, MessageCircle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, Mic, MessageCircle, ArrowUpRight } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import { useAuth } from '../context/AuthContext';
@@ -31,6 +31,11 @@ export default function SearchPage() {
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 10000]);
   const [sortBy, setSortBy] = useState('relevance');
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [correctedQuery, setCorrectedQuery] = useState<string | null>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const { token } = useAuth();
   const navigate = useNavigate();
@@ -87,13 +92,45 @@ export default function SearchPage() {
     } catch {}
   };
 
+  // Fetch autocomplete suggestions
+  useEffect(() => {
+    if (query.length < 1 || !token) {
+      setSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      fetch(`/api/search/suggestions?q=${encodeURIComponent(query)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(res => res.ok ? res.json() : { suggestions: [] })
+        .then(data => {
+          setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
+        })
+        .catch(() => setSuggestions([]));
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [query, token]);
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   useEffect(() => {
     if (query.length < 2) {
       setResults({ products: [], stores: [] });
+      setCorrectedQuery(null);
       return;
     }
     const timer = setTimeout(() => {
       setLoading(true);
+      setShowSuggestions(false);
       saveSearch(query);
       fetch(`/api/search/ai?q=${encodeURIComponent(query)}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -104,6 +141,7 @@ export default function SearchPage() {
             products: Array.isArray(data.products) ? data.products : [],
             stores: Array.isArray(data.stores) ? data.stores : [],
           });
+          setCorrectedQuery(data.correctedQuery || null);
           setLoading(false);
         })
         .catch(() => setLoading(false));
@@ -198,42 +236,103 @@ export default function SearchPage() {
           </h1>
 
           {/* Search input + filter button */}
-          <div className="flex items-center gap-2 mb-2">
-            <div
-              className="flex items-center gap-2 flex-1"
-              style={{ background: 'var(--dk-surface)', borderRadius: 14, padding: '10px 12px' }}
-            >
-              <SearchIcon size={18} style={{ color: 'var(--dk-text-tertiary)', flexShrink: 0 }} />
-              <input
-                type="text"
-                placeholder="Search products, brands, or stores..."
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                className="flex-1 bg-transparent outline-none text-sm"
-                style={{ color: 'var(--dk-text-primary)' }}
-              />
-              {query ? (
-                <button onClick={() => setQuery('')}>
-                  <X size={16} style={{ color: 'var(--dk-text-tertiary)' }} />
-                </button>
-              ) : (
-                <button onClick={() => console.log('TODO: mic input')}>
-                  <Mic size={18} style={{ color: 'var(--dk-accent)' }} />
-                </button>
-              )}
+          <div className="relative" ref={suggestionsRef}>
+            <div className="flex items-center gap-2 mb-0">
+              <div
+                className="flex items-center gap-2 flex-1"
+                style={{ background: 'var(--dk-surface)', borderRadius: 14, padding: '10px 12px' }}
+              >
+                <SearchIcon size={18} style={{ color: 'var(--dk-text-tertiary)', flexShrink: 0 }} />
+                <input
+                  ref={inputRef}
+                  type="text"
+                  placeholder="Search products, brands, or stores..."
+                  value={query}
+                  onChange={e => { setQuery(e.target.value); setShowSuggestions(true); }}
+                  onFocus={() => setShowSuggestions(true)}
+                  className="flex-1 bg-transparent outline-none text-sm"
+                  style={{ color: 'var(--dk-text-primary)' }}
+                />
+                {query ? (
+                  <button onClick={() => { setQuery(''); setSuggestions([]); setCorrectedQuery(null); }}>
+                    <X size={16} style={{ color: 'var(--dk-text-tertiary)' }} />
+                  </button>
+                ) : (
+                  <button onClick={() => console.log('TODO: mic input')}>
+                    <Mic size={18} style={{ color: 'var(--dk-accent)' }} />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="flex items-center justify-center flex-shrink-0"
+                style={{
+                  width: 46, height: 46, borderRadius: 14,
+                  background: hasFilters || showFilters ? '#1A1A1A' : 'var(--dk-surface)',
+                  border: '0.5px solid var(--dk-border)',
+                }}
+              >
+                <SlidersHorizontal size={18} color={hasFilters || showFilters ? 'white' : 'var(--dk-text-secondary)'} />
+              </button>
             </div>
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center justify-center flex-shrink-0"
+
+            {/* Autocomplete suggestions dropdown */}
+            {showSuggestions && suggestions.length > 0 && query.length >= 1 && (
+              <div
+                className="absolute left-0 right-12 z-30 mt-1 overflow-hidden"
+                style={{
+                  background: 'white',
+                  borderRadius: 14,
+                  border: '0.5px solid var(--dk-border)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+                  maxHeight: 280,
+                  overflowY: 'auto',
+                }}
+              >
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors"
+                    style={{ borderBottom: i < suggestions.length - 1 ? '0.5px solid var(--dk-border)' : 'none' }}
+                    onMouseDown={(e) => { e.preventDefault(); setQuery(s); setShowSuggestions(false); }}
+                  >
+                    <SearchIcon size={14} style={{ color: 'var(--dk-text-tertiary)', flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: 'var(--dk-text-primary)', flex: 1 }}>
+                      {s.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')).map((part, j) =>
+                        part.toLowerCase() === query.toLowerCase()
+                          ? <strong key={j} style={{ color: 'var(--dk-accent)' }}>{part}</strong>
+                          : <span key={j}>{part}</span>
+                      )}
+                    </span>
+                    <ArrowUpRight size={12} style={{ color: 'var(--dk-text-tertiary)', flexShrink: 0 }} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Did you mean? correction banner */}
+          {correctedQuery && isSearching && (
+            <div
+              className="flex items-center gap-2 mb-3 mt-2 px-3 py-2.5"
               style={{
-                width: 46, height: 46, borderRadius: 14,
-                background: hasFilters || showFilters ? '#1A1A1A' : 'var(--dk-surface)',
+                background: 'var(--dk-bg-warm)',
+                borderRadius: 12,
                 border: '0.5px solid var(--dk-border)',
               }}
             >
-              <SlidersHorizontal size={18} color={hasFilters || showFilters ? 'white' : 'var(--dk-text-secondary)'} />
-            </button>
-          </div>
+              <SearchIcon size={14} style={{ color: 'var(--dk-accent)' }} />
+              <span style={{ fontSize: 13, color: 'var(--dk-text-secondary)' }}>
+                Showing results for{' '}
+                <button
+                  onClick={() => setQuery(correctedQuery)}
+                  style={{ fontWeight: 700, color: 'var(--dk-accent)', textDecoration: 'underline', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, padding: 0 }}
+                >
+                  {correctedQuery}
+                </button>
+              </span>
+            </div>
+          )}
 
           {/* Filter panel */}
           {showFilters && (

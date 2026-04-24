@@ -7,6 +7,7 @@ import { MapPin, Navigation, X, Clock, Phone, Settings, Search, Store, LocateFix
 import { Link } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import { getStoreStatus } from '../lib/storeUtils';
+import { useUserLocation } from '../context/LocationContext';
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
 const DEFAULT_CENTER = { lat: 20.5937, lng: 78.9629 };
@@ -47,11 +48,13 @@ const CATEGORY_COLORS: Record<string, string> = {
 export default function MapPage() {
   const [stores, setStores] = useState<any[]>([]);
   const [selectedStore, setSelectedStore] = useState<any>(null);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [listExpanded, setListExpanded] = useState(false);
   const mapRef = useRef<google.maps.Map | null>(null);
+
+  const { location: userLocCtx } = useUserLocation();
+  const userLocation = userLocCtx ? { lat: userLocCtx.lat, lng: userLocCtx.lng } : null;
 
   const getDistanceKm = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
     const R = 6371;
@@ -70,17 +73,6 @@ export default function MapPage() {
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
     id: 'google-map-script',
   });
-
-  useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => setUserLocation(DEFAULT_CENTER)
-      );
-    } else {
-      setUserLocation(DEFAULT_CENTER);
-    }
-  }, []);
 
   useEffect(() => {
     fetch('/api/stores?limit=200')

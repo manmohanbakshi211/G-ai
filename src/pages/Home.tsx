@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { MapPin, MessageCircle, Store as StoreIcon, Heart, Bookmark, Share2, SlidersHorizontal, Check } from 'lucide-react';
+import { MapPin, MessageCircle, Store as StoreIcon, Heart, Bookmark, Share2, SlidersHorizontal, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
 import { getStoreStatus } from '../lib/storeUtils';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { useUserLocation } from '../context/LocationContext';
+import LocationPicker from '../components/LocationPicker';
 
 const renderCaption = (caption: string) => {
   const m = caption.match(/^([^.!?]+[.!?])([\s\S]*)$/);
@@ -58,21 +60,69 @@ export default function HomePage() {
   const [feedType, setFeedType] = useState('global');
   const [locationRange, setLocationRange] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
-  const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const { location: userLocCtx } = useUserLocation();
+  const userLoc = userLocCtx ? { lat: userLocCtx.lat, lng: userLocCtx.lng } : null;
+  
+  // Sticky bar height calculation
+  const topBarRef = useRef<HTMLDivElement>(null);
+  const [topBarHeight, setTopBarHeight] = useState(0);
   // naturalWidth / naturalHeight ratio for each post's image
   const [imgRatios, setImgRatios] = useState<Record<string, number>>({});
+  // Carousel
+  const [carouselImages, setCarouselImages] = useState<string[]>([]);
+  const [carouselIdx, setCarouselIdx] = useState(0);
+  const carouselTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { token, user, logout } = useAuth();
   const { showToast } = useToast();
 
+
+  // Fetch carousel images from admin settings
   useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        pos => setUserLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => {}
-      );
-    }
+    fetch('/api/app-settings')
+      .then(r => r.json())
+      .then(data => {
+        if (data.carouselImages && data.carouselImages.length > 0) {
+          setCarouselImages(data.carouselImages);
+        } else {
+          // Fallback banners when admin hasn't set any
+          setCarouselImages([
+            'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=800&h=400&fit=crop&q=80',
+            'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=800&h=400&fit=crop&q=80',
+            'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=800&h=400&fit=crop&q=80',
+          ]);
+        }
+      })
+      .catch(() => {
+        setCarouselImages([
+          'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=800&h=400&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=800&h=400&fit=crop&q=80',
+          'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=800&h=400&fit=crop&q=80',
+        ]);
+      });
   }, []);
+
+  // Auto-slide carousel
+  useEffect(() => {
+    if (carouselImages.length <= 1) return;
+    carouselTimer.current = setInterval(() => {
+      setCarouselIdx(prev => (prev + 1) % carouselImages.length);
+    }, 4000);
+    return () => { if (carouselTimer.current) clearInterval(carouselTimer.current); };
+  }, [carouselImages]);
+
+  const goCarousel = useCallback((dir: 'prev' | 'next') => {
+    if (carouselTimer.current) clearInterval(carouselTimer.current);
+    setCarouselIdx(prev =>
+      dir === 'next'
+        ? (prev + 1) % carouselImages.length
+        : (prev - 1 + carouselImages.length) % carouselImages.length
+    );
+    carouselTimer.current = setInterval(() => {
+      setCarouselIdx(prev => (prev + 1) % carouselImages.length);
+    }, 4000);
+  }, [carouselImages]);
 
   const getDistance = (lat?: number, lng?: number): string | null => {
     if (!userLoc || !lat || !lng) return null;
@@ -148,6 +198,13 @@ export default function HomePage() {
   };
 
   useEffect(() => { fetchFeed(); }, [token, feedType, locationRange]);
+
+  // Update top sticky bar height for the tabs to stick just beneath it
+  useEffect(() => {
+    if (topBarRef.current) {
+      setTopBarHeight(topBarRef.current.offsetHeight);
+    }
+  }, [userLoc, feedType, locationRange]); // Re-calculate if anything layout-changing happens in top bar
 
   const toggleLike = async (postId: string) => {
     const isLiked = interactions.likedPostIds.includes(postId);
@@ -233,8 +290,8 @@ export default function HomePage() {
     <div style={{ background: 'var(--dk-bg)', minHeight: '100vh', paddingBottom: 80 }}>
       <div className="max-w-md mx-auto">
 
-        {/* ── Sticky top block ── */}
-        <div className="sticky top-0 z-20" style={{ background: 'var(--dk-bg)' }}>
+        {/* ── Sticky top block (Header + Location) ── */}
+        <div ref={topBarRef} className="sticky top-0 z-30" style={{ background: 'var(--dk-bg)' }}>
           <AppHeader />
 
           {/* Location bar */}
@@ -247,23 +304,125 @@ export default function HomePage() {
               <span style={{ fontSize: 12, color: 'var(--dk-text-secondary)' }}>
                 Showing stores near{' '}
                 <strong style={{ color: 'var(--dk-text-primary)', fontWeight: 600 }}>
-                  your area
+                  {userLocCtx ? userLocCtx.name : 'your area'}
                 </strong>
               </span>
             </div>
             <button
               style={{ fontSize: 12, color: 'var(--dk-accent)', fontWeight: 600 }}
-              onClick={() => console.log('TODO: navigate to location picker')}
+              onClick={() => setShowLocationPicker(true)}
             >
               Change
             </button>
           </div>
+        </div>
 
-          {/* Tabs + distance filter */}
-          <div
-            className="px-4 py-2.5 flex items-center justify-between"
-            style={{ borderBottom: '0.5px solid var(--dk-border)' }}
-          >
+        {/* ── Carousel banner ── */}
+        {carouselImages.length > 0 && (
+          <div className="px-4 py-2" style={{ background: 'var(--dk-bg)' }}>
+            <div
+              style={{
+                position: 'relative',
+                borderRadius: 'var(--dk-radius-xl)',
+                overflow: 'hidden',
+                aspectRatio: '2.2 / 1',
+                background: '#e5e7eb',
+              }}
+            >
+              {/* Images */}
+              <div
+                style={{
+                  display: 'flex',
+                  transition: 'transform 0.45s cubic-bezier(.4,0,.2,1)',
+                  transform: `translateX(-${carouselIdx * 100}%)`,
+                  height: '100%',
+                }}
+              >
+                {carouselImages.map((img, i) => (
+                  <img
+                    key={i}
+                    src={img.startsWith('http') ? img : img}
+                    alt={`Banner ${i + 1}`}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      flexShrink: 0,
+                    }}
+                    draggable={false}
+                  />
+                ))}
+              </div>
+
+              {/* Prev / Next buttons */}
+              {carouselImages.length > 1 && (
+                <>
+                  <button
+                    onClick={() => goCarousel('prev')}
+                    style={{
+                      position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)',
+                      width: 28, height: 28, borderRadius: '50%',
+                      background: 'rgba(0,0,0,0.35)', color: 'white',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      backdropFilter: 'blur(4px)', border: 'none', cursor: 'pointer',
+                    }}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    onClick={() => goCarousel('next')}
+                    style={{
+                      position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                      width: 28, height: 28, borderRadius: '50%',
+                      background: 'rgba(0,0,0,0.35)', color: 'white',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      backdropFilter: 'blur(4px)', border: 'none', cursor: 'pointer',
+                    }}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </>
+              )}
+
+              {/* Dots */}
+              {carouselImages.length > 1 && (
+                <div
+                  style={{
+                    position: 'absolute', bottom: 8, left: 0, right: 0,
+                    display: 'flex', justifyContent: 'center', gap: 5,
+                  }}
+                >
+                  {carouselImages.map((_, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        if (carouselTimer.current) clearInterval(carouselTimer.current);
+                        setCarouselIdx(i);
+                        carouselTimer.current = setInterval(() => { setCarouselIdx(prev => (prev + 1) % carouselImages.length); }, 4000);
+                      }}
+                      style={{
+                        width: i === carouselIdx ? 18 : 6,
+                        height: 6,
+                        borderRadius: 3,
+                        background: i === carouselIdx ? 'white' : 'rgba(255,255,255,0.5)',
+                        transition: 'all 0.3s ease',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: 0,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Tabs + distance filter */}
+        <div
+          className="sticky z-20 px-4 py-2.5 flex items-center justify-between"
+          style={{ top: topBarHeight, background: 'var(--dk-bg)', borderBottom: '0.5px solid var(--dk-border)' }}
+        >
             <div
               className="flex p-0.5 rounded-full gap-0.5"
               style={{ background: 'var(--dk-surface)' }}
@@ -322,7 +481,6 @@ export default function HomePage() {
               )}
             </div>
           </div>
-        </div>
 
         {/* ── Feed ── */}
         <main className="px-4 pt-4 space-y-4">
@@ -435,21 +593,22 @@ export default function HomePage() {
                             </svg>
                           )}
                         </div>
-                        {/* Status row */}
+                        {/* Status row — single line: open/closed · distance · category */}
                         <div
                           className="flex items-center gap-1 flex-wrap"
                           style={{ fontSize: 11, color: 'var(--dk-text-tertiary)', marginTop: 1 }}
                         >
-                          {status && (
-                            <span
-                              style={{
-                                color: status.isOpen ? 'var(--dk-success)' : 'var(--dk-danger)',
-                                fontWeight: 500,
-                              }}
-                            >
-                              ● {status.isOpen ? 'Open now' : 'Closed'}
-                            </span>
-                          )}
+                          <span
+                            style={{
+                              color: status?.isOpen !== false ? 'var(--dk-success)' : 'var(--dk-danger)',
+                              fontWeight: 500,
+                            }}
+                          >
+                            {status
+                              ? (status.isOpen ? '● Store is open' : '● Store closed now')
+                              : '● Store is open'
+                            }
+                          </span>
                           {distance && (
                             <>
                               <span style={{ color: 'var(--dk-border-strong)' }}>·</span>
@@ -629,6 +788,10 @@ export default function HomePage() {
           )}
         </main>
       </div>
+
+      {showLocationPicker && (
+        <LocationPicker onClose={() => setShowLocationPicker(false)} />
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import { useAuth } from '../context/AuthContext';
 import { getStoreStatus } from '../lib/storeUtils';
+import { useUserLocation } from '../context/LocationContext';
 
 const TRENDING = ['PS5', 'iPhone 15', 'perfumes', 'earbuds'];
 
@@ -29,20 +30,12 @@ export default function SearchPage() {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 10000]);
   const [sortBy, setSortBy] = useState('relevance');
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
 
   const { token } = useAuth();
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        pos => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => {}
-      );
-    }
-  }, []);
+  const { location: userLocCtx } = useUserLocation();
+  const userLocation = userLocCtx ? { lat: userLocCtx.lat, lng: userLocCtx.lng } : null;
 
   useEffect(() => {
     if (!token) return;

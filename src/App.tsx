@@ -20,6 +20,7 @@ import NotFoundPage from './pages/NotFound';
 import { NotificationProvider } from './context/NotificationContext';
 import { AuthProvider } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
+import { LocationProvider } from './context/LocationContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import BottomNav from './components/BottomNav';
 
@@ -28,6 +29,7 @@ export default function App() {
     <Router>
       <AuthProvider>
         <ToastProvider>
+          <LocationProvider>
           <NotificationProvider>
             <div className="min-h-screen pb-16" style={{ background: 'var(--dk-bg)' }}>
               <Routes>
@@ -48,6 +50,7 @@ export default function App() {
               <BottomNav />
             </div>
           </NotificationProvider>
+          </LocationProvider>
         </ToastProvider>
       </AuthProvider>
     </Router>

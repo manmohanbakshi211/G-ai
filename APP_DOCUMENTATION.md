@@ -172,15 +172,19 @@ Non-customer roles (retailer, supplier, brand, manufacturer) must complete KYC b
 - Save posts
 
 ### Search (`/search`)
-- Full-text search across stores and products
-- Results cached in Redis for 60 seconds per role+query
-- Search history saved per user (last 10 queries)
-- Role-aware results
+- **Smart Semantic Search**: Two-layer pipeline combining fast alias dictionary matching with Gemini + `pgvector` semantic embeddings for deep conceptual matches.
+- **Fuzzy Spell Correction**: Levenshtein distance algorithm auto-corrects typos against a dynamic vocabulary (refreshed every 5 mins).
+- **Category-Aware Filtering**: Intelligent keyword inference (e.g. "phone" -> Electronics) prevents irrelevant cross-category results.
+- **Real-time Autocomplete**: Dropdown suggestions with highlighted match text as users type.
+- Results cached in Redis for 60 seconds per role+query.
+- Search history saved per user (last 10 queries).
+- Role-aware results.
 
 ### Map (`/map`)
 - Google Maps integration
 - Shows all stores as pins
 - Filter by category
+- **Bottom Sheet UI**: Upward-expanding bottom sheet showing nearby stores (horizontal cards when collapsed, scrollable list when expanded).
 - Save locations
 - Click pin → store profile
 

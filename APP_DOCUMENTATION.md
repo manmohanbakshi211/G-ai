@@ -54,6 +54,7 @@ Both share a single **Express + TypeScript backend** (`server.ts`).
 | Validation | `zod` |
 | Compression | `compression` (gzip/brotli) |
 | Rate Limiting | `express-rate-limit` + Redis store |
+| Error Tracking | Sentry (`@sentry/node`) |
 | Process Manager | PM2 (cluster mode, all CPU cores) |
 
 ### Frontend (Main App)

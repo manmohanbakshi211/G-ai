@@ -33,3 +33,8 @@
 ### 5. Housekeeping
 - Configured `.gitignore` to exclude local `uploads/` directory to prevent binary bloat in version control.
 - Created robust test data environment with `npm run seed:test`.
+
+### 6. Sentry Error Tracking Integration
+- Installed `@sentry/node` and created `instrument.ts` configuration.
+- Configured the Sentry Express error handler in `server.ts` before other error middlewares.
+- Verified tracking end-to-end via an intentional throw in a `/debug-sentry` endpoint.

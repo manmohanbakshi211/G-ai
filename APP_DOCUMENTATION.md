@@ -225,6 +225,12 @@ Non-customer roles (retailer, supplier, brand, manufacturer) must complete KYC b
 - **Team Members tab** — add/remove team members (max 3), each gets their own login
 - Store settings (hours, category, address, GST, etc.)
 - Password change
+- **Bulk Product Import** — upload `.xlsx`, `.xls`, or `.csv` files to import products in bulk:
+  - Gemini 2.0 Flash auto-maps arbitrary column names to product fields (`productName`, `price`, `description`, `category`, `brand`)
+  - Falls back to keyword heuristics if AI mapping fails
+  - Upserts products (create or update by name per store)
+  - Background embedding generation for search indexing after import
+  - Rate limited to 5 imports/day per store; max 1,000 rows per file
 
 ### Support (`/support`)
 - Submit a complaint/support ticket
@@ -309,6 +315,7 @@ All routes are prefixed `/api/`. Full list in `server.ts`.
 | POST | `/api/stores` | JWT | Create store (after KYC) |
 | PUT | `/api/stores/:id` | JWT | Update store |
 | GET | `/api/stores/:id` | JWT | Store details |
+| POST | `/api/stores/:storeId/bulk-import` | JWT | Bulk import products from spreadsheet (multipart/form-data, field: `file`) |
 | GET | `/api/search` | JWT | Search stores + products |
 | POST | `/api/messages` | JWT | Send message |
 | GET | `/api/messages/:userId` | JWT | Get conversation |
@@ -371,6 +378,7 @@ All limits are Redis-backed (survive restarts, shared across cluster workers).
 | `authLimiter` | `/api/login`, `/api/users` | 20 req / 15 min per IP |
 | `uploadLimiter` | `/api/upload` | 10 req/min per IP |
 | `messageLimiter` | `/api/messages` | 30 req/min per IP |
+| `bulkImportLimiter` | `/api/stores/:storeId/bulk-import` | 5 imports/day per store (Redis counter, resets midnight UTC) |
 
 ---
 
@@ -382,6 +390,7 @@ All limits are Redis-backed (survive restarts, shared across cluster workers).
 | `search:{role}:{query}` | 60s | Search results per role + query |
 | `blocked:{userId}` | 60s | User blocked status (avoids DB hit per request) |
 | `team:{teamMemberId}` | 120s | Team member existence check |
+| `bulk_import:{storeId}:{YYYY-MM-DD}` | 86400s | Daily import counter per store (incremented on each import; expires at end of day) |
 
 ---
 
@@ -455,7 +464,7 @@ The script installs: Node.js 22, PostgreSQL 14, Redis, Nginx, Certbot (SSL), PM2
 
 ---
 
-*Last updated: 2026-04-25 (Session 7)*
+*Last updated: 2026-04-25 (Session 9)*
 
 ### Architecture Update (2026-04-24)
 The application has been successfully migrated to a Domain-Driven Design (DDD). The monolithic server.ts has been deprecated as a router and now serves strictly as the application entry point. All business logic and routes have been extracted into the `src/modules/` directory, background jobs into `src/workers/`, and real-time events into `src/config/socket-listeners.ts`.

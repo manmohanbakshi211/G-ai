@@ -6,6 +6,31 @@
 
 ---
 
+## 2026-04-25 — Session 9 (Bulk Excel import with AI column mapping)
+
+### Commit: feat: bulk Excel/CSV product import with AI column mapping
+
+#### src/modules/stores/bulkImport.service.ts (new)
+- `parseExcelFile(buffer)` — reads .xlsx/.xls/.csv via `xlsx` lib, returns headers + rows, enforces 1000-row limit
+- `mapColumnsWithAI(headers, sampleRows)` — sends first 3 rows to Gemini 2.0 Flash, returns `ColumnMapping`; falls back to keyword matching if AI fails
+- `checkRateLimit(storeId)` — Redis counter, max 5 bulk imports per store per day (86400s TTL)
+- `importProducts(storeId, rows, mapping)` — upserts products (findFirst + update/create), fires embedding generation in background
+
+#### src/modules/stores/store.routes.ts
+- Added `xlsUpload` multer config (memory storage, 5 MB limit, .xlsx/.xls/.csv filter)
+- Added `POST /:storeId/bulk-import` route (auth required)
+
+#### src/modules/stores/store.controller.ts
+- Added `bulkImport` handler — verifies ownership, checks rate limit, parses → maps → imports, returns `{ success, imported, skipped, mappingUsed, errors }`
+
+#### src/pages/UserSettings.tsx
+- Replaced broken `/api/products/upload` handler with new `/api/stores/:storeId/bulk-import`
+- Added `importLoading` + `importResult` state
+- New UI: spinner while AI reads file, success card showing count + detected column mapping + "View imported products" link
+- File input now accepts .xlsx, .xls, .csv
+
+---
+
 ## 2026-04-23 — Session 5 (UI redesign phase 1 — tokens, home, search)
 
 ### Commit: TBD — ui: premium redesign phase 1 (home + search)

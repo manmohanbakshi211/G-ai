@@ -1,8 +1,21 @@
 import { Router } from "express";
+import multer from "multer";
+import path from "path";
 import { StoreController } from "./store.controller";
 import { authenticateToken } from "../../middlewares/auth.middleware";
 import { validate } from "../../../validators/validate";
 import { createStoreSchema } from "../../../validators/schemas";
+
+// Memory-storage multer for bulk import — spreadsheets processed in-memory, not saved to disk
+const xlsUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.xlsx', '.xls', '.csv'].includes(ext)) cb(null, true);
+    else cb(new Error('Only .xlsx, .xls, and .csv files are accepted'));
+  },
+});
 
 const router = Router();
 
@@ -13,6 +26,7 @@ router.get("/:id", StoreController.getStoreById);
 router.put("/:id", authenticateToken, StoreController.updateStore);
 router.post("/:id/follow", authenticateToken, StoreController.toggleFollow);
 router.get("/:id/posts", StoreController.getStorePosts);
+router.post("/:storeId/bulk-import", authenticateToken, xlsUpload.single("file"), StoreController.bulkImport);
 
 // /api/pincode
 const pincodeRouter = Router();

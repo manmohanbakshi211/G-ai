@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { StoreService } from "./store.service";
+import { BulkImportService } from "./bulkImport.service";
 import { prisma } from "../../config/prisma";
+import { logger } from "../../lib/logger";
 
 export class StoreController {
   static async createStore(req: Request, res: Response) {
@@ -149,6 +151,43 @@ export class StoreController {
       res.json(products);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch products" });
+    }
+  }
+
+  static async bulkImport(req: Request, res: Response) {
+    const { storeId } = req.params;
+    const userId = (req as any).user.userId;
+
+    try {
+      if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
+
+      // Verify ownership
+      const store = await prisma.store.findUnique({ where: { id: storeId }, select: { ownerId: true } });
+      if (!store) return res.status(404).json({ success: false, error: "Store not found" });
+      if (store.ownerId !== userId) return res.status(403).json({ success: false, error: "Not your store" });
+
+      // Rate limit
+      await BulkImportService.checkRateLimit(storeId);
+
+      // Parse file
+      const { headers, rows } = BulkImportService.parseExcelFile(req.file.buffer);
+
+      // AI column mapping
+      const mapping = await BulkImportService.mapColumnsWithAI(headers, rows);
+
+      // Import
+      const result = await BulkImportService.importProducts(storeId, rows, mapping);
+
+      logger.info({ storeId, userId, imported: result.imported, skipped: result.skipped }, '[BulkImport] Import completed');
+
+      res.json({ success: true, imported: result.imported, skipped: result.skipped, mappingUsed: mapping, errors: result.errors });
+    } catch (err: any) {
+      // Handle multer file filter errors
+      if (err.message?.includes('Only .xlsx')) {
+        return res.status(400).json({ success: false, error: err.message });
+      }
+      logger.error({ err, storeId }, '[BulkImport] Import failed');
+      res.status(400).json({ success: false, error: err.message || 'Import failed' });
     }
   }
 }

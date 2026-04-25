@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { MapPin, Phone, Clock, MessageCircle, ArrowLeft, Navigation, UserPlus, UserCheck, Share2, X, Star, Heart, Package, ExternalLink } from 'lucide-react';
 import StarRating from '../components/StarRating';
 import ReviewModal from '../components/ReviewModal';
-import { getStoreStatus } from '../lib/storeUtils';
+import { getStoreStatus, statusColor } from '../lib/storeUtils';
 import { useToast } from '../context/ToastContext';
 
 export default function StoreProfilePage() {
@@ -147,7 +147,6 @@ export default function StoreProfilePage() {
 
   const tabs = [
     { key: 'posts', label: 'Posts', count: posts.length },
-    { key: 'products', label: 'Products', count: products.length },
     ...(showReviews ? [{ key: 'reviews', label: 'Reviews', count: reviews.length }] : []),
   ];
 
@@ -297,8 +296,8 @@ export default function StoreProfilePage() {
             {/* Open/Closed status */}
             {storeStatus && (
               <div className="flex items-center gap-2">
-                <Clock size={14} style={{ color: storeStatus.isOpen ? '#10B981' : '#EF4444', flexShrink: 0 }} />
-                <span style={{ fontSize: 12, fontWeight: 600, color: storeStatus.isOpen ? '#10B981' : '#EF4444' }}>
+                <Clock size={14} style={{ color: statusColor(storeStatus.color), flexShrink: 0 }} />
+                <span style={{ fontSize: 12, fontWeight: 600, color: statusColor(storeStatus.color) }}>
                   {storeStatus.label}
                 </span>
               </div>
@@ -463,48 +462,6 @@ export default function StoreProfilePage() {
                   <p style={{ fontSize: 13, color: 'var(--dk-text-tertiary)' }}>No posts yet</p>
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Products */}
-          {activeTab === 'products' && (
-            <div className="px-4 py-3">
-              <input
-                type="text"
-                placeholder="Search products..."
-                value={productSearch}
-                onChange={e => setProductSearch(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-xl text-sm outline-none mb-3"
-                style={{ background: 'var(--dk-surface)', color: 'var(--dk-text-primary)', border: '0.5px solid var(--dk-border)' }}
-              />
-              <div className="space-y-2">
-                {filteredProducts.map(p => (
-                  <div
-                    key={p.id}
-                    className="flex items-center gap-3 p-3 rounded-xl"
-                    style={{ background: 'white', border: '0.5px solid var(--dk-border)' }}
-                  >
-                    <div style={{ width: 48, height: 48, borderRadius: 10, background: 'var(--dk-surface)', flexShrink: 0, overflow: 'hidden' }}>
-                      {p.imageUrl && <img src={p.imageUrl} className="w-full h-full object-cover" alt={p.productName} />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="truncate font-semibold" style={{ fontSize: 13, color: 'var(--dk-text-primary)' }}>{p.productName}</p>
-                      {p.category && <p style={{ fontSize: 11, color: 'var(--dk-text-tertiary)', marginTop: 1 }}>{p.category}</p>}
-                    </div>
-                    {p.price && (
-                      <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--dk-text-primary)', flexShrink: 0 }}>
-                        ₹{Number(p.price).toLocaleString()}
-                      </p>
-                    )}
-                  </div>
-                ))}
-                {filteredProducts.length === 0 && (
-                  <div className="py-12 text-center">
-                    <Package size={36} style={{ color: 'var(--dk-border-strong)', margin: '0 auto 8px' }} />
-                    <p style={{ fontSize: 13, color: 'var(--dk-text-tertiary)' }}>No products listed</p>
-                  </div>
-                )}
-              </div>
             </div>
           )}
 

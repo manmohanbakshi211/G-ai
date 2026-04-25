@@ -118,6 +118,19 @@ export class SearchService {
       }
     }
 
+    // Lift stores from product matches into the stores array so a product hit always surfaces the parent store
+    const existingStoreIds = new Set(stores.map((s: any) => s.id));
+    const storeIdsFromProducts = [...new Set((products as any[]).map(p => p.storeId))].filter(id => !existingStoreIds.has(id));
+    if (storeIdsFromProducts.length > 0) {
+      const extraStores = await prisma.store.findMany({
+        where: { id: { in: storeIdsFromProducts }, owner: { role: { in: allowedRoles } } },
+        include: { owner: { select: { role: true, id: true } } },
+        orderBy: { averageRating: 'desc' },
+      });
+      stores = [...stores, ...extraStores] as any;
+    }
+
+    console.log(`[SEARCH standard] q="${searchStr}" → ${products.length} products, ${stores.length} stores (${storeIdsFromProducts.length} lifted from products)`);
     const result = { products, stores, source };
     pubClient.set(searchCacheKey, JSON.stringify(result), { EX: 60 }).catch(() => {});
     return result;
@@ -250,10 +263,38 @@ export class SearchService {
           orderBy: { averageRating: 'desc' },
         }),
       ]);
-      return { products: fallbackProducts, stores: fallbackStores, query: searchStr, correctedQuery, detectedCategory };
+
+      // Lift stores from fallback product matches
+      const fbExisting = new Set(fallbackStores.map((s: any) => s.id));
+      const fbExtraIds = [...new Set(fallbackProducts.map((p: any) => p.storeId))].filter(id => !fbExisting.has(id));
+      let mergedFbStores: any[] = [...fallbackStores];
+      if (fbExtraIds.length > 0) {
+        const fbExtra = await prisma.store.findMany({
+          where: { id: { in: fbExtraIds }, owner: { role: { in: allowedRoles } } },
+          include: { owner: { select: { role: true, id: true } } },
+          orderBy: { averageRating: 'desc' },
+        });
+        mergedFbStores = [...fallbackStores, ...fbExtra];
+      }
+      console.log(`[SEARCH ai-fallback] q="${searchStr}" cat="${detectedCategory}" → ${fallbackProducts.length} products, ${mergedFbStores.length} stores`);
+      return { products: fallbackProducts, stores: mergedFbStores, query: searchStr, correctedQuery, detectedCategory };
     }
 
-    return { products, stores, query: searchStr, correctedQuery, detectedCategory };
+    // Lift stores from product matches into stores array
+    const existingIds = new Set(stores.map((s: any) => s.id));
+    const extraStoreIds = [...new Set(products.map((p: any) => p.storeId))].filter(id => !existingIds.has(id));
+    let mergedStores: any[] = [...stores];
+    if (extraStoreIds.length > 0) {
+      const extraStores = await prisma.store.findMany({
+        where: { id: { in: extraStoreIds }, owner: { role: { in: allowedRoles } } },
+        include: { owner: { select: { role: true, id: true } } },
+        orderBy: { averageRating: 'desc' },
+      });
+      mergedStores = [...stores, ...extraStores];
+    }
+
+    console.log(`[SEARCH ai] q="${searchStr}" cat="${detectedCategory}" → ${products.length} products, ${mergedStores.length} stores (${extraStoreIds.length} lifted)`);
+    return { products, stores: mergedStores, query: searchStr, correctedQuery, detectedCategory };
   }
 
   static async saveSearchHistory(userId: string, query: string) {

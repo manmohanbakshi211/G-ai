@@ -6,6 +6,37 @@
 
 ---
 
+## 2026-04-26 — Session 10 (bug fixes: status, products tab, search, chat suggestions + features: closing countdown, store-only search)
+
+### Commit: fix: store status, remove products tab, search improvements, chat suggestions
+
+#### src/lib/storeUtils.ts
+- Added `color: 'green' | 'yellow' | 'red'` and `minutesUntilClose?` to `StoreStatus` interface
+- "Closing in X mins" label + yellow color when store closes within 60 minutes
+- Exported `statusColor()` helper to map color key → hex value (#F59E0B / #10B981 / #EF4444)
+
+#### src/pages/Home.tsx, Map.tsx, Search.tsx, Profile.tsx, StoreProfile.tsx
+- All status displays now use `statusColor(status.color)` — yellow badge for closing-soon stores
+- Home.tsx: replaced hardcoded "Store is open" / "Store closed now" with `status.label`
+- Map.tsx: replaced hardcoded "Open" / "Open now" / "Closed" with `sStatus.label` and proper color
+
+#### src/pages/StoreProfile.tsx
+- Removed "Products" tab from tab bar and its full panel content — only Posts + Reviews remain
+
+#### src/pages/Search.tsx
+- Removed product cards from search results — only store cards shown
+- Removed price range filter and product-only sort options (Price ↑/↓)
+- Results count now shows "X stores found"
+
+#### src/modules/search/search.service.ts
+- `performStandardSearch` + `performAISearch`: after fetching products, extract unique `storeId`s and lift matching stores into the stores array (deduped) — fixes "PS5 returns no stores" bug
+- Added `console.log` showing match counts per query for debugging
+
+#### src/pages/Messages.tsx
+- Suggested stores filter: fetch limit=8, then exclude stores where `ownerId === currentUserId` — own store no longer appears in suggestions
+
+---
+
 ## 2026-04-25 — Session 9 (Bulk Excel import with AI column mapping)
 
 ### Commit: feat: bulk Excel/CSV product import with AI column mapping

@@ -6,7 +6,7 @@ const Marker = MarkerComponent as any;
 import { MapPin, Navigation, X, Clock, Phone, Settings, Search, Store, LocateFixed, ChevronUp, ChevronDown } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
-import { getStoreStatus } from '../lib/storeUtils';
+import { getStoreStatus, statusColor } from '../lib/storeUtils';
 import { useUserLocation } from '../context/LocationContext';
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
@@ -407,7 +407,7 @@ export default function MapPage() {
                                   {store.category && <p style={{ fontSize: 11, color: 'var(--dk-accent)', fontWeight: 600, marginTop: 1 }}>{store.category}</p>}
                                   <div className="flex items-center gap-3 mt-1">
                                     {dist && <div className="flex items-center gap-1"><MapPin size={11} style={{ color: 'var(--dk-accent)' }} /><span style={{ fontSize: 11, color: 'var(--dk-text-secondary)' }}>{dist}</span></div>}
-                                    {sStatus && <span style={{ fontSize: 11, fontWeight: 600, color: sStatus.isOpen ? '#10B981' : '#EF4444' }}>● {sStatus.isOpen ? 'Open' : 'Closed'}</span>}
+                                    {sStatus && <span style={{ fontSize: 11, fontWeight: 600, color: statusColor(sStatus.color) }}>● {sStatus.label}</span>}
                                   </div>
                                 </div>
                               </div>
@@ -445,8 +445,8 @@ export default function MapPage() {
                           <div className="px-2.5 py-2">
                             <p className="truncate font-bold" style={{ fontSize: 12, color: '#1A1A1A' }}>{store.storeName}</p>
                             <div className="flex items-center gap-1 mt-1">
-                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: sStatus?.isOpen ? '#10B981' : '#EF4444', flexShrink: 0 }} />
-                              <span style={{ fontSize: 10, fontWeight: 600, color: sStatus?.isOpen ? '#10B981' : '#EF4444' }}>{sStatus?.isOpen ? 'Open now' : 'Closed'}</span>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: sStatus ? statusColor(sStatus.color) : '#EF4444', flexShrink: 0 }} />
+                              <span style={{ fontSize: 10, fontWeight: 600, color: sStatus ? statusColor(sStatus.color) : '#EF4444' }}>{sStatus?.label ?? 'Closed'}</span>
                             </div>
                             <p style={{ fontSize: 10, color: 'var(--dk-text-tertiary)', marginTop: 2 }}>{dist}{catChip ? ` · ${catChip.emoji} ${store.category}` : ''}</p>
                           </div>

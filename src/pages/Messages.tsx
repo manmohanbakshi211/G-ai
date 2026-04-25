@@ -26,9 +26,14 @@ export default function MessagesPage() {
   }, [token]);
 
   useEffect(() => {
-    fetch('/api/stores?limit=5', { credentials: 'include' })
+    const currentUserId = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}')?.id; } catch { return null; } })();
+    fetch('/api/stores?limit=8', { credentials: 'include' })
       .then(r => r.ok ? r.json() : { stores: [] })
-      .then(data => setSuggestedStores((Array.isArray(data) ? data : (data.stores ?? [])).slice(0, 3)))
+      .then(data => {
+        const all: any[] = Array.isArray(data) ? data : (data.stores ?? []);
+        const filtered = currentUserId ? all.filter((s: any) => s.ownerId !== currentUserId) : all;
+        setSuggestedStores(filtered.slice(0, 3));
+      })
       .catch(() => {});
   }, []);
 

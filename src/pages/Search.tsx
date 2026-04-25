@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, Mic, MessageCircle, ArrowUpRight } from 'lucide-react';
+import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, Mic, ArrowUpRight } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import { useAuth } from '../context/AuthContext';
-import { getStoreStatus } from '../lib/storeUtils';
+import { getStoreStatus, statusColor } from '../lib/storeUtils';
 import { useUserLocation } from '../context/LocationContext';
 
 const TRENDING = ['PS5', 'iPhone 15', 'perfumes', 'earbuds'];
@@ -28,7 +28,6 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('');
-  const [priceRange, setPriceRange] = useState<[number, number]>([0, 10000]);
   const [sortBy, setSortBy] = useState('relevance');
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -146,21 +145,7 @@ export default function SearchPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  const hasResults = results.products.length > 0 || results.stores.length > 0;
-
-  const filteredProducts = results.products
-    .filter(p => {
-      if (selectedCategory && p.category?.toLowerCase() !== selectedCategory.toLowerCase())
-        return false;
-      if (p.price < priceRange[0] || p.price > priceRange[1]) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'price_low') return a.price - b.price;
-      if (sortBy === 'price_high') return b.price - a.price;
-      if (sortBy === 'name') return a.productName.localeCompare(b.productName);
-      return 0;
-    });
+  const hasResults = results.stores.length > 0;
 
   const filteredStores = results.stores
     .filter(s => {
@@ -174,8 +159,8 @@ export default function SearchPage() {
       return aOpen - bOpen;
     });
 
-  const hasFilters = selectedCategory || sortBy !== 'relevance' || priceRange[0] > 0 || priceRange[1] < 10000;
-  const clearFilters = () => { setSelectedCategory(''); setPriceRange([0, 10000]); setSortBy('relevance'); };
+  const hasFilters = selectedCategory || sortBy !== 'relevance';
+  const clearFilters = () => { setSelectedCategory(''); setSortBy('relevance'); };
 
   const getDistance = (storeLat: number, storeLng: number): string | null => {
     if (!userLocation || !storeLat || !storeLng) return null;
@@ -361,33 +346,10 @@ export default function SearchPage() {
                   </button>
                 ))}
               </div>
-              {/* Price Range */}
-              <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--dk-text-tertiary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Price range</p>
-              <div className="flex items-center gap-3 mb-4">
-                <input
-                  type="number"
-                  min="0"
-                  value={priceRange[0]}
-                  onChange={e => setPriceRange([Number(e.target.value), priceRange[1]])}
-                  className="rounded-xl text-sm outline-none"
-                  style={{ width: 80, padding: '8px 10px', background: 'var(--dk-surface)', border: '0.5px solid var(--dk-border)', color: 'var(--dk-text-primary)' }}
-                  placeholder="Min"
-                />
-                <span style={{ color: 'var(--dk-text-tertiary)', fontSize: 13 }}>–</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={priceRange[1]}
-                  onChange={e => setPriceRange([priceRange[0], Number(e.target.value)])}
-                  className="rounded-xl text-sm outline-none"
-                  style={{ width: 80, padding: '8px 10px', background: 'var(--dk-surface)', border: '0.5px solid var(--dk-border)', color: 'var(--dk-text-primary)' }}
-                  placeholder="Max"
-                />
-              </div>
               {/* Sort */}
               <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--dk-text-tertiary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Sort by</p>
               <div className="flex gap-2 flex-wrap">
-                {[{ key: 'relevance', label: 'Relevance' }, { key: 'price_low', label: 'Price ↑' }, { key: 'price_high', label: 'Price ↓' }, { key: 'name', label: 'Name A-Z' }].map(opt => (
+                {[{ key: 'relevance', label: 'Relevance' }, { key: 'name', label: 'Name A-Z' }].map(opt => (
                   <button
                     key={opt.key}
                     onClick={() => setSortBy(opt.key)}
@@ -512,7 +474,7 @@ export default function SearchPage() {
               {/* Results count */}
               <div className="flex items-center mb-4">
                 <span style={{ fontSize: 13, color: 'var(--dk-text-secondary)' }}>
-                  {loading ? 'Searching...' : hasResults ? `${filteredStores.length + filteredProducts.length} results` : ''}
+                  {loading ? 'Searching...' : hasResults ? `${filteredStores.length} store${filteredStores.length !== 1 ? 's' : ''} found` : ''}
                 </span>
               </div>
 
@@ -591,7 +553,7 @@ export default function SearchPage() {
                                       {status && (
                                         <span
                                           className="flex items-center gap-1"
-                                          style={{ fontSize: 12, fontWeight: 500, color: status.isOpen ? 'var(--dk-success)' : 'var(--dk-danger)' }}
+                                          style={{ fontSize: 12, fontWeight: 500, color: statusColor(status.color) }}
                                         >
                                           <Clock size={10} />
                                           {status.label}
@@ -630,116 +592,7 @@ export default function SearchPage() {
                     </div>
                   )}
 
-                  {filteredProducts.length > 0 && (
-                    <div>
-                      <p
-                        className="text-xs font-semibold uppercase tracking-wider mb-3"
-                        style={{ color: 'var(--dk-text-tertiary)' }}
-                      >
-                        Products ({filteredProducts.length})
-                      </p>
-                      <div className="space-y-3">
-                        {filteredProducts.map(product => {
-                          const store = product.store || {};
-                          const status = getStoreStatus(store.openingTime, store.closingTime, store.is24Hours, store.workingDays);
-                          const distance = getDistance(store.latitude, store.longitude);
-                          return (
-                            <div
-                              key={product.id}
-                              className="overflow-hidden"
-                              style={{ background: 'white', borderRadius: 'var(--dk-radius-lg)', border: '0.5px solid var(--dk-border)' }}
-                            >
-                              {/* Store header */}
-                              <div className="flex items-center gap-2.5 px-3 pt-3 pb-2">
-                                <Link to={`/store/${product.storeId}`} onClick={e => e.stopPropagation()}>
-                                  <div style={{ width: 38, height: 38, borderRadius: 12, overflow: 'hidden', background: 'var(--dk-surface)', border: '1.5px solid var(--dk-accent)', flexShrink: 0 }}>
-                                    {store.logoUrl
-                                      ? <img src={store.logoUrl} alt={store.storeName} className="w-full h-full object-cover" />
-                                      : <div className="w-full h-full flex items-center justify-center" style={{ fontSize: 16 }}>🏪</div>
-                                    }
-                                  </div>
-                                </Link>
-                                <div className="flex-1 min-w-0">
-                                  <Link to={`/store/${product.storeId}`}>
-                                    <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--dk-text-primary)' }} className="truncate">{store.storeName || 'Store'}</p>
-                                  </Link>
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    {status && (
-                                      <span style={{ fontSize: 11, fontWeight: 600, color: status.isOpen ? 'var(--dk-success)' : 'var(--dk-danger)' }}>
-                                        {status.label}
-                                      </span>
-                                    )}
-                                    {distance && (
-                                      <>
-                                        {status && <span style={{ fontSize: 10, color: 'var(--dk-border-strong)' }}>·</span>}
-                                        <span style={{ fontSize: 11, color: 'var(--dk-text-tertiary)' }}>{distance} away</span>
-                                      </>
-                                    )}
-                                    {store.category && (
-                                      <>
-                                        <span style={{ fontSize: 10, color: 'var(--dk-border-strong)' }}>·</span>
-                                        <span style={{ fontSize: 11, color: 'var(--dk-text-tertiary)' }}>{store.category}</span>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Product image */}
-                              {product.imageUrl && (
-                                <div style={{ aspectRatio: '4/3', overflow: 'hidden', background: 'var(--dk-surface)' }}>
-                                  <img src={product.imageUrl} alt={product.productName} className="w-full h-full object-cover" loading="lazy" />
-                                </div>
-                              )}
-
-                              {/* Product details */}
-                              <div className="px-3 pt-2.5 pb-1">
-                                <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--dk-text-primary)' }}>{product.productName}</p>
-                                {product.brand && (
-                                  <p style={{ fontSize: 12, color: 'var(--dk-text-tertiary)', marginTop: 1 }}>{product.brand}</p>
-                                )}
-                                {product.description && (
-                                  <p style={{ fontSize: 12, color: 'var(--dk-text-secondary)', marginTop: 4, lineHeight: 1.4 }} className="line-clamp-2">{product.description}</p>
-                                )}
-                                <p style={{ fontSize: 18, fontWeight: 800, color: 'var(--dk-accent)', marginTop: 6 }}>₹{product.price.toLocaleString()}</p>
-                              </div>
-
-                              {/* Action buttons */}
-                              <div className="flex gap-2 px-3 pb-3 pt-1">
-                                <Link
-                                  to={`/chat/${store.ownerId}`}
-                                  onClick={e => e.stopPropagation()}
-                                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold"
-                                  style={{ background: 'var(--dk-surface)', color: 'var(--dk-text-secondary)', border: '0.5px solid var(--dk-border)' }}
-                                >
-                                  <MessageCircle size={13} />
-                                  Chat
-                                </Link>
-                                <button
-                                  onClick={() => openDirections(store)}
-                                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold"
-                                  style={{ background: 'var(--dk-accent)', color: 'white' }}
-                                >
-                                  <Navigation size={13} />
-                                  Navigate
-                                </button>
-                                <Link
-                                  to={`/store/${product.storeId}`}
-                                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-semibold"
-                                  style={{ background: '#1A1A1A', color: 'white' }}
-                                >
-                                  <Store size={13} />
-                                  Store
-                                </Link>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {filteredProducts.length === 0 && filteredStores.length === 0 && hasFilters && (
+                  {filteredStores.length === 0 && hasFilters && (
                     <div className="text-center py-12">
                       <Filter size={36} style={{ color: 'var(--dk-border-strong)', margin: '0 auto 8px' }} />
                       <p style={{ fontSize: 14, color: 'var(--dk-text-secondary)' }}>

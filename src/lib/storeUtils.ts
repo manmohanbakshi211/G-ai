@@ -1,6 +1,8 @@
 export interface StoreStatus {
   isOpen: boolean;
   label: string;
+  color: 'green' | 'yellow' | 'red';
+  minutesUntilClose?: number;
 }
 
 const formatTime = (h: number, m: number): string => {
@@ -16,9 +18,9 @@ export function getStoreStatus(
 ): StoreStatus | null {
   if (workingDays) {
     const today = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date().getDay()];
-    if (!workingDays.includes(today)) return { isOpen: false, label: 'Closed Today' };
+    if (!workingDays.includes(today)) return { isOpen: false, label: 'Closed Today', color: 'red' };
   }
-  if (is24Hours) return { isOpen: true, label: 'Open 24 Hours' };
+  if (is24Hours) return { isOpen: true, label: 'Open 24 Hours', color: 'green' };
   if (!openingTime || !closingTime) return null;
 
   const [openH, openM] = openingTime.split(':').map(Number);
@@ -31,6 +33,18 @@ export function getStoreStatus(
     ? nowMins >= openMins && nowMins < closeMins
     : nowMins >= openMins || nowMins < closeMins;
 
-  if (isOpen) return { isOpen: true, label: `Open · Closes at ${formatTime(closeH, closeM)}` };
-  return { isOpen: false, label: `Closed · Opens at ${formatTime(openH, openM)}` };
+  if (isOpen) {
+    const minsLeft = closeMins > nowMins ? closeMins - nowMins : (closeMins + 1440) - nowMins;
+    if (minsLeft <= 60) {
+      return { isOpen: true, label: `Closing in ${minsLeft} min${minsLeft === 1 ? '' : 's'}`, color: 'yellow', minutesUntilClose: minsLeft };
+    }
+    return { isOpen: true, label: `Open · Closes at ${formatTime(closeH, closeM)}`, color: 'green' };
+  }
+  return { isOpen: false, label: `Closed · Opens at ${formatTime(openH, openM)}`, color: 'red' };
+}
+
+export function statusColor(color: 'green' | 'yellow' | 'red'): string {
+  if (color === 'yellow') return '#F59E0B';
+  if (color === 'green') return '#10B981';
+  return '#EF4444';
 }

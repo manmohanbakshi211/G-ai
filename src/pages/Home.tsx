@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { MapPin, MessageCircle, Store as StoreIcon, Heart, Bookmark, Share2, SlidersHorizontal, Check, ChevronLeft, ChevronRight } from 'lucide-react';
 import AppHeader from '../components/AppHeader';
-import { getStoreStatus } from '../lib/storeUtils';
+import { getStoreStatus, statusColor } from '../lib/storeUtils';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useUserLocation } from '../context/LocationContext';
@@ -594,14 +594,11 @@ export default function HomePage() {
                         >
                           <span
                             style={{
-                              color: status?.isOpen !== false ? 'var(--dk-success)' : 'var(--dk-danger)',
+                              color: status ? statusColor(status.color) : 'var(--dk-success)',
                               fontWeight: 500,
                             }}
                           >
-                            {status
-                              ? (status.isOpen ? '● Store is open' : '● Store closed now')
-                              : '● Store is open'
-                            }
+                            {status ? `● ${status.label}` : '● Open'}
                           </span>
                           {distance && (
                             <>

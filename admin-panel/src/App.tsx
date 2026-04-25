@@ -26,9 +26,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/api/me')
+    // Uses authenticateAdminToken — only passes if dk_admin_token cookie is present
+    api.get('/api/admin/me')
       .then(res => {
-        if (res.data && !res.data.error && res.data.role === 'admin') setIsAuthenticated(true);
+        if (res.data?.role === 'admin') setIsAuthenticated(true);
         else setIsAuthenticated(false);
       })
       .catch(() => setIsAuthenticated(false))

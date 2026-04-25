@@ -6,6 +6,10 @@ import { upload } from "../../middlewares/upload.middleware";
 const router = Router();
 
 // /api/admin
+// Lightweight auth-check endpoint — requires dk_admin_token, used by admin panel on load
+router.get("/me", authenticateAdminToken, requireAdmin, (req: any, res: any) => {
+  res.json({ id: req.user.userId, role: req.user.role });
+});
 router.get("/stats", authenticateAdminToken, requireAdmin, AdminController.getStats);
 router.get("/users", authenticateAdminToken, requireAdmin, AdminController.getUsers);
 router.post("/reset-password", authenticateAdminToken, requireAdmin, AdminController.resetPassword);

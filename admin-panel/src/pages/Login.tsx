@@ -16,8 +16,7 @@ export default function Login({ onLogin }: { onLogin?: () => void }) {
     setError('');
 
     try {
-      const API = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-      const res = await axios.post(`${API}/api/auth/login`, { phone, password }, { withCredentials: true });
+      const res = await axios.post(`/api/auth/login`, { phone, password }, { withCredentials: true });
 
       if (res.data.user.role !== 'admin') {
         throw new Error('Access denied. Admin accounts only.');

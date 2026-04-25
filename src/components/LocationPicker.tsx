@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, MapPin, LocateFixed, Search, ChevronRight } from 'lucide-react';
-import { useUserLocation, reverseGeocode, UserLocation } from '../context/LocationContext';
+import { useUserLocation, UserLocation } from '../context/LocationContext';
 
 interface NominatimResult {
   place_id: number;
@@ -44,7 +44,8 @@ export default function LocationPicker({ onClose }: Props) {
       setSearching(true);
       try {
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&limit=7`, { credentials: 'include',  headers: { 'Accept-Language': 'en' } }
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&addressdetails=1&limit=7`,
+          { headers: { 'Accept-Language': 'en' } }
         );
         const data: NominatimResult[] = await res.json();
         setResults(data);
@@ -186,7 +187,7 @@ export default function LocationPicker({ onClose }: Props) {
                 Results
               </p>
               <div style={{ borderRadius: 14, overflow: 'hidden', border: '0.5px solid var(--dk-border)' }}>
-                {results.map((r, i) => (
+                {results.map((r: NominatimResult, i: number) => (
                   <button
                     key={r.place_id}
                     onClick={() => handleSelect(r)}

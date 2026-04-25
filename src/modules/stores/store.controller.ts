@@ -7,23 +7,28 @@ import { logger } from "../../lib/logger";
 export class StoreController {
   static async createStore(req: Request, res: Response) {
     try {
-      const currentUser = await prisma.user.findUnique({ 
-        where: { id: (req as any).user.userId }, 
-        select: { role: true, kycStatus: true } 
+      const jwtUser = (req as any).user;
+      // ownerId is always the JWT user; body ownerId is ignored unless the caller is admin
+      const ownerId = jwtUser.role === 'admin' && req.body.ownerId
+        ? req.body.ownerId
+        : jwtUser.userId;
+
+      const currentUser = await prisma.user.findUnique({
+        where: { id: ownerId },
+        select: { role: true, kycStatus: true }
       });
-      
+
       if (currentUser && currentUser.role !== "customer" && currentUser.role !== "admin" && currentUser.kycStatus !== "approved") {
         return res.status(403).json({ error: "KYC verification required", kycStatus: currentUser.kycStatus });
       }
 
-      const { ownerId, phone } = req.body;
-      
+      const { phone } = req.body;
+
       if (phone) {
-        const actualOwnerId = ownerId || (req as any).user.userId;
-        const owner = await prisma.user.findUnique({ where: { id: actualOwnerId } });
+        const owner = await prisma.user.findUnique({ where: { id: ownerId } });
         const normalizedPhone = phone.replace(/[\s\-()\+]/g, '');
         const ownerPhone = owner?.phone?.replace(/[\s\-()\+]/g, '') || '';
-        
+
         if (normalizedPhone !== ownerPhone && normalizedPhone !== ownerPhone.replace(/^91/, '')) {
           const existingStore = await prisma.store.findFirst({ where: { phone } });
           if (existingStore) {
@@ -32,7 +37,7 @@ export class StoreController {
         }
       }
 
-      const storeData = { ...req.body, ownerId: ownerId || (req as any).user.userId };
+      const storeData = { ...req.body, ownerId };
       const store = await StoreService.createStore(storeData);
       res.json(store);
     } catch (error) {

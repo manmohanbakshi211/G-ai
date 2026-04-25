@@ -473,29 +473,31 @@ export class AdminService {
       select: { id: true, name: true, kycStatus: true, kycStoreName: true, kycStorePhoto: true },
     });
 
-    // On approval: sync KYC store name + photo to the user's store
+    // On approval: always ensure the user has a store. Sync KYC name + photo if available.
     if (status === 'approved') {
       const existingStore = await prisma.store.findFirst({ where: { ownerId: userId } });
-      const updateData: any = {};
-      if (user.kycStoreName) updateData.storeName = user.kycStoreName;
-      if (user.kycStorePhoto) updateData.logoUrl = user.kycStorePhoto;
+      const storeName = user.kycStoreName || `${user.name}'s Store`;
+      const logoUrl = user.kycStorePhoto || null;
 
-      if (Object.keys(updateData).length > 0) {
-        if (existingStore) {
+      if (existingStore) {
+        const updateData: any = {};
+        if (user.kycStoreName) updateData.storeName = storeName;
+        if (user.kycStorePhoto) updateData.logoUrl = logoUrl;
+        if (Object.keys(updateData).length > 0) {
           await prisma.store.update({ where: { id: existingStore.id }, data: updateData });
-        } else {
-          await prisma.store.create({
-            data: {
-              ownerId: userId,
-              storeName: user.kycStoreName || 'My Store',
-              category: 'General',
-              address: '',
-              latitude: 0,
-              longitude: 0,
-              logoUrl: user.kycStorePhoto || null,
-            },
-          });
         }
+      } else {
+        await prisma.store.create({
+          data: {
+            ownerId: userId,
+            storeName,
+            category: 'General',
+            address: '',
+            latitude: 0,
+            longitude: 0,
+            logoUrl,
+          },
+        });
       }
     }
 

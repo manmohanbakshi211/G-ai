@@ -442,7 +442,7 @@ export class AdminService {
 
   static async getKycList(status: string, page: number, limit: number) {
     const skip = (page - 1) * limit;
-    const where: any = { kycStatus: { not: "none" } };
+    const where: any = { kycStatus: { not: "none" }, role: { not: "admin" } };
     if (status && status !== "all") where.kycStatus = status;
 
     const [users, total, pendingCount, approvedCount, rejectedCount] = await Promise.all([
@@ -454,15 +454,21 @@ export class AdminService {
         select: { id: true, name: true, phone: true, role: true, kycStatus: true, kycDocumentUrl: true, kycSelfieUrl: true, kycNotes: true, kycSubmittedAt: true, kycReviewedAt: true, kycStoreName: true, kycStorePhoto: true },
       }),
       prisma.user.count({ where }),
-      prisma.user.count({ where: { kycStatus: "pending" } }),
-      prisma.user.count({ where: { kycStatus: "approved" } }),
-      prisma.user.count({ where: { kycStatus: "rejected" } }),
+      prisma.user.count({ where: { kycStatus: "pending", role: { not: "admin" } } }),
+      prisma.user.count({ where: { kycStatus: "approved", role: { not: "admin" } } }),
+      prisma.user.count({ where: { kycStatus: "rejected", role: { not: "admin" } } }),
     ]);
 
     return { users, total, pendingCount, approvedCount, rejectedCount, page, totalPages: Math.ceil(total / limit) };
   }
 
   static async updateKycStatus(userId: string, status: string, notes?: string) {
+    // Fetch role first — admin accounts can never be KYC-approved into a store
+    const target = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    if (target?.role === 'admin') {
+      throw new Error('Cannot modify KYC status of an admin account');
+    }
+
     const user = await prisma.user.update({
       where: { id: userId },
       data: {
@@ -488,15 +494,7 @@ export class AdminService {
         }
       } else {
         await prisma.store.create({
-          data: {
-            ownerId: userId,
-            storeName,
-            category: 'General',
-            address: '',
-            latitude: 0,
-            longitude: 0,
-            logoUrl,
-          },
+          data: { ownerId: userId, storeName, category: 'General', address: '', latitude: 0, longitude: 0, logoUrl },
         });
       }
     }

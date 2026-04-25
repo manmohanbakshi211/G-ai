@@ -3,6 +3,9 @@ import { KycService } from "./kyc.service";
 
 export class KycController {
   static async submitKyc(req: Request, res: Response) {
+    if ((req as any).user.role === 'admin') {
+      return res.status(403).json({ error: "Admin accounts cannot submit KYC" });
+    }
     try {
       const userId = (req as any).user.userId;
       const user = await KycService.submitKyc(userId, req.body);

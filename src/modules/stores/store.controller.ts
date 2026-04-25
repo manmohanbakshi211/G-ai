@@ -8,7 +8,14 @@ export class StoreController {
   static async createStore(req: Request, res: Response) {
     try {
       const jwtUser = (req as any).user;
-      // ownerId is always the JWT user; body ownerId is ignored unless the caller is admin
+
+      // Admin accounts cannot own stores — they manage the platform, not storefronts
+      if (jwtUser.role === 'admin' && !req.body.ownerId) {
+        return res.status(403).json({ error: "Admin accounts cannot create stores" });
+      }
+
+      // ownerId is always the JWT user; body ownerId only accepted when caller is admin
+      // (so admin can create a store on behalf of an approved user via the admin panel)
       const ownerId = jwtUser.role === 'admin' && req.body.ownerId
         ? req.body.ownerId
         : jwtUser.userId;
@@ -18,7 +25,12 @@ export class StoreController {
         select: { role: true, kycStatus: true }
       });
 
-      if (currentUser && currentUser.role !== "customer" && currentUser.role !== "admin" && currentUser.kycStatus !== "approved") {
+      // Block if target user is also an admin
+      if (currentUser?.role === 'admin') {
+        return res.status(403).json({ error: "Admin accounts cannot own stores" });
+      }
+
+      if (currentUser && currentUser.role !== "customer" && currentUser.kycStatus !== "approved") {
         return res.status(403).json({ error: "KYC verification required", kycStatus: currentUser.kycStatus });
       }
 

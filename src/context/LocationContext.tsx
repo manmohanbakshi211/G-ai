@@ -67,10 +67,16 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Auto-detect on first load if nothing is cached
+  // Auto-detect on first load if nothing cached, or if cached name is the fallback
+  // (happens when Nominatim was blocked by CORS and stored 'your area')
   useEffect(() => {
     if (!location) {
       detectCurrentLocation();
+    } else if (location.name === 'your area' && location.lat !== 0) {
+      // Coordinates are valid but name failed — re-geocode silently
+      reverseGeocode(location.lat, location.lng).then(name => {
+        if (name !== 'your area') setLocation({ ...location, name });
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

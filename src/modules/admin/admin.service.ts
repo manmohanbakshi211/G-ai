@@ -485,6 +485,8 @@ export class AdminService {
       const storeName = user.kycStoreName || `${user.name}'s Store`;
       const logoUrl = user.kycStorePhoto || null;
 
+      let storeId: string;
+
       if (existingStore) {
         const updateData: any = {};
         if (user.kycStoreName) updateData.storeName = storeName;
@@ -492,10 +494,30 @@ export class AdminService {
         if (Object.keys(updateData).length > 0) {
           await prisma.store.update({ where: { id: existingStore.id }, data: updateData });
         }
+        storeId = existingStore.id;
       } else {
-        await prisma.store.create({
+        const newStore = await prisma.store.create({
           data: { ownerId: userId, storeName, category: 'General', address: '', latitude: 0, longitude: 0, logoUrl },
         });
+        storeId = newStore.id;
+      }
+
+      // Create the opening post from the KYC store photo if one doesn't already exist
+      if (logoUrl) {
+        const hasOpeningPost = await prisma.post.findFirst({
+          where: { storeId, isOpeningPost: true },
+          select: { id: true },
+        });
+        if (!hasOpeningPost) {
+          await prisma.post.create({
+            data: {
+              storeId,
+              imageUrl: logoUrl,
+              caption: `Welcome to ${storeName}! We are now open.`,
+              isOpeningPost: true,
+            },
+          });
+        }
       }
     }
 

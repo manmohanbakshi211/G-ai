@@ -327,7 +327,7 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-screen" style={{ background: 'var(--dk-bg)' }}>
+      <div className="flex justify-center items-center h-screen" style={{ background: 'white' }}>
         <div className="w-10 h-10 rounded-full border-4 border-t-transparent animate-spin"
           style={{ borderColor: 'var(--dk-border-strong)', borderTopColor: 'var(--dk-accent)' }} />
       </div>
@@ -346,9 +346,9 @@ export default function ProfilePage() {
   // ========================
   if (!isBusinessAccount) {
     return (
-      <div style={{ background: 'var(--dk-bg)', minHeight: '100vh', paddingBottom: 80 }}>
+      <div style={{ background: 'white', minHeight: '100vh', paddingBottom: 80 }}>
         <div className="max-w-md mx-auto">
-          <div className="sticky top-0 z-20 px-4 pt-5 pb-3" style={{ background: 'var(--dk-bg)' }}>
+          <div className="sticky top-0 z-20 px-4 pt-5 pb-3" style={{ background: 'white' }}>
             <div className="flex items-center justify-between">
               <h1 style={{ fontSize: 26, fontWeight: 700, color: 'var(--dk-text-primary)' }}>Profile</h1>
               <div className="flex items-center gap-3">
@@ -582,7 +582,7 @@ export default function ProfilePage() {
   const storeStatus = getStoreStatus(store.openingTime, store.closingTime, store.is24Hours, store.workingDays);
 
   return (
-    <div style={{ background: 'var(--dk-bg)', minHeight: '100vh', paddingBottom: 80 }}>
+    <div style={{ background: 'white', minHeight: '100vh', paddingBottom: 80 }}>
       <div className="max-w-md mx-auto">
 
         {/* ── Cover ── */}
@@ -656,7 +656,7 @@ export default function ProfilePage() {
 
           {/* Store details card */}
           {(store.address || store.postalCode || store.city || store.state || store.phone || storeStatus || store.openingTime || store.closingTime || store.workingDays || (store.latitude && store.longitude && store.latitude !== 0)) && (
-            <div className="mt-4 space-y-2 p-3 rounded-2xl" style={{ background: 'var(--dk-surface)', border: '0.5px solid var(--dk-border)' }}>
+            <div className="mt-4 space-y-2 p-3 rounded-2xl" style={{ background: '#F5F5F5', border: '0.5px solid var(--dk-border)' }}>
               {store.address && (
                 <div className="flex items-start gap-2">
                   <MapPin size={14} style={{ color: 'var(--dk-accent)', flexShrink: 0, marginTop: 1 }} />
@@ -751,7 +751,7 @@ export default function ProfilePage() {
         </div>
 
         {/* ── Tabs ── */}
-        <div className="sticky z-10 flex border-b" style={{ top: 0, background: 'var(--dk-bg)', borderColor: 'var(--dk-border)' }}>
+        <div className="sticky z-10 flex border-b" style={{ top: 0, background: 'white', borderColor: 'var(--dk-border)' }}>
           <button
             onClick={() => setActiveTab('posts')}
             className="flex-1 flex items-center justify-center gap-1 py-3"
@@ -870,8 +870,8 @@ export default function ProfilePage() {
 
       {/* POST DETAIL / MANAGE POST MODAL */}
       {selectedPost && (
-        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'var(--dk-bg)' }}>
-          <header className="flex items-center justify-between px-4 py-3" style={{ background: 'var(--dk-bg)', borderBottom: '0.5px solid var(--dk-border)' }}>
+        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'white' }}>
+          <header className="flex items-center justify-between px-4 py-3" style={{ background: 'white', borderBottom: '0.5px solid var(--dk-border)' }}>
             <button onClick={() => setSelectedPost(null)}>
               <ArrowLeft size={22} style={{ color: 'var(--dk-text-primary)' }} />
             </button>
@@ -968,7 +968,7 @@ export default function ProfilePage() {
       {/* NEW POST MODAL */}
       {showNewPostModal && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center">
-          <div className="w-full max-w-md rounded-t-2xl p-5" style={{ background: 'var(--dk-bg)' }}>
+          <div className="w-full max-w-md rounded-t-2xl p-5" style={{ background: 'white' }}>
             <div className="flex items-center justify-between mb-5">
               <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--dk-text-primary)' }}>New Post</h3>
               <button onClick={() => { setShowNewPostModal(false); setNewPostImage(''); setNewPostCaption(''); setNewPostPrice(''); }}>
@@ -1062,7 +1062,7 @@ export default function ProfilePage() {
       {/* EDIT POST MODAL */}
       {editingPost && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center">
-          <div className="w-full max-w-md rounded-t-2xl p-5 max-h-[90vh] overflow-y-auto" style={{ background: 'var(--dk-bg)' }}>
+          <div className="w-full max-w-md rounded-t-2xl p-5 max-h-[90vh] overflow-y-auto" style={{ background: 'white' }}>
             <div className="flex items-center justify-between mb-5">
               <h3 style={{ fontSize: 17, fontWeight: 700, color: 'var(--dk-text-primary)' }}>Edit Post</h3>
               <button onClick={() => setEditingPost(null)}><X size={22} style={{ color: 'var(--dk-text-tertiary)' }} /></button>
@@ -1138,7 +1138,7 @@ export default function ProfilePage() {
       {/* POST DELETE CONFIRMATION MODAL */}
       {postToDelete && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-6" onClick={() => setPostToDelete(null)}>
-          <div className="rounded-2xl p-6 w-full max-w-sm" style={{ background: 'var(--dk-bg)' }} onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl p-6 w-full max-w-sm" style={{ background: 'white' }} onClick={e => e.stopPropagation()}>
             <div className="text-center">
               <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: '#FEF2F2' }}>
                 <Trash2 size={24} style={{ color: '#EF4444' }} />

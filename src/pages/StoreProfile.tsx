@@ -128,7 +128,7 @@ export default function StoreProfilePage() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-screen" style={{ background: 'var(--dk-bg)' }}>
+      <div className="flex justify-center items-center h-screen" style={{ background: 'white' }}>
         <div className="w-10 h-10 rounded-full border-4 border-t-transparent animate-spin"
           style={{ borderColor: 'var(--dk-border-strong)', borderTopColor: 'var(--dk-accent)' }} />
       </div>
@@ -151,7 +151,7 @@ export default function StoreProfilePage() {
   ];
 
   return (
-    <div style={{ background: 'var(--dk-bg)', minHeight: '100vh', paddingBottom: 80 }}>
+    <div style={{ background: 'white', minHeight: '100vh', paddingBottom: 80 }}>
       <div className="max-w-md mx-auto">
 
         {/* ── Cover + Logo ── */}
@@ -268,7 +268,7 @@ export default function StoreProfilePage() {
           {/* Details card */}
           <div
             className="mt-4 space-y-2 p-3 rounded-2xl"
-            style={{ background: 'var(--dk-surface)', border: '0.5px solid var(--dk-border)' }}
+            style={{ background: '#F5F5F5', border: '0.5px solid var(--dk-border)' }}
           >
             {/* Address */}
             {store.address && (
@@ -391,7 +391,7 @@ export default function StoreProfilePage() {
         {/* ── Tabs ── */}
         <div
           className="sticky z-10 flex border-b"
-          style={{ top: 0, background: 'var(--dk-bg)', borderColor: 'var(--dk-border)' }}
+          style={{ top: 0, background: 'white', borderColor: 'var(--dk-border)' }}
         >
           {tabs.map(tab => (
             <button
@@ -525,10 +525,10 @@ export default function StoreProfilePage() {
 
       {/* ── Post detail modal ── */}
       {selectedPost && (
-        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'var(--dk-bg)' }}>
+        <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'white' }}>
           <header
             className="flex items-center justify-between px-4 py-3"
-            style={{ background: 'var(--dk-bg)', borderBottom: '0.5px solid var(--dk-border)' }}
+            style={{ background: 'white', borderBottom: '0.5px solid var(--dk-border)' }}
           >
             <button onClick={() => setSelectedPost(null)}>
               <ArrowLeft size={22} style={{ color: 'var(--dk-text-primary)' }} />

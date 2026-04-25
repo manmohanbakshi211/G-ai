@@ -31,13 +31,16 @@ const displayName = (user: RecentUser) => {
 export default function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const fetchStats = useCallback(async () => {
     try {
       const res = await api.get('/api/admin/stats', { headers: getAdminHeaders() });
       setStats(res.data);
-    } catch (err) {
+      setError('');
+    } catch (err: any) {
       console.error(err);
+      setError(err?.response?.data?.error || 'Failed to load stats');
     } finally {
       setLoading(false);
     }
@@ -91,6 +94,11 @@ export default function Dashboard() {
 
   return (
     <AdminLayout title="Dashboard Overview">
+      {error && (
+        <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm">
+          {error} — <button onClick={fetchStats} className="underline font-medium">Retry</button>
+        </div>
+      )}
       {/* Stats Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
         {statCards.map((card) => (

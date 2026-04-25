@@ -28,7 +28,8 @@ function App() {
   useEffect(() => {
     api.get('/api/me')
       .then(res => {
-        if (res.data && !res.data.error) setIsAuthenticated(true);
+        if (res.data && !res.data.error && res.data.role === 'admin') setIsAuthenticated(true);
+        else setIsAuthenticated(false);
       })
       .catch(() => setIsAuthenticated(false))
       .finally(() => setIsLoading(false));

@@ -470,9 +470,36 @@ export class AdminService {
         kycNotes: notes,
         kycReviewedAt: new Date(),
       },
-      select: { id: true, name: true, kycStatus: true },
+      select: { id: true, name: true, kycStatus: true, kycStoreName: true, kycStorePhoto: true },
     });
+
+    // On approval: sync KYC store name + photo to the user's store
+    if (status === 'approved') {
+      const existingStore = await prisma.store.findFirst({ where: { ownerId: userId } });
+      const updateData: any = {};
+      if (user.kycStoreName) updateData.storeName = user.kycStoreName;
+      if (user.kycStorePhoto) updateData.logoUrl = user.kycStorePhoto;
+
+      if (Object.keys(updateData).length > 0) {
+        if (existingStore) {
+          await prisma.store.update({ where: { id: existingStore.id }, data: updateData });
+        } else {
+          await prisma.store.create({
+            data: {
+              ownerId: userId,
+              storeName: user.kycStoreName || 'My Store',
+              category: 'General',
+              address: '',
+              latitude: 0,
+              longitude: 0,
+              logoUrl: user.kycStorePhoto || null,
+            },
+          });
+        }
+      }
+    }
+
     await pubClient.del(ADMIN_STATS_KEY);
-    return user;
+    return { id: user.id, name: user.name, kycStatus: user.kycStatus };
   }
 }

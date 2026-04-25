@@ -80,7 +80,7 @@ export default function HomePage() {
 
   // Fetch carousel images from admin settings
   useEffect(() => {
-    fetch('/api/app-settings')
+    fetch('/api/app-settings', { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         if (data.carouselImages && data.carouselImages.length > 0) {
@@ -153,15 +153,15 @@ export default function HomePage() {
     if (!token) return;
     setLoading(true);
     try {
-      const intRes = await fetch('/api/me/interactions', {
-        headers: { Authorization: `Bearer ${token}` },
+      const intRes = await fetch('/api/me/interactions', { credentials: 'include', 
+        
       });
       if (intRes.status === 401 || intRes.status === 403) { logout(); return; }
       setInteractions(await intRes.json());
 
       if (feedType === 'saved') {
-        const savedRes = await fetch(`/api/users/${user?.id}/saved`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const savedRes = await fetch(`/api/users/${user?.id}/saved`, { credentials: 'include', 
+          
         });
         if (savedRes.status === 401 || savedRes.status === 403) { logout(); return; }
         const savedData = await savedRes.json();
@@ -173,8 +173,7 @@ export default function HomePage() {
           lng = userLoc.lng;
         }
         const postsRes = await fetch(
-          `/api/posts?feedType=${feedType}&locationRange=${locationRange}&lat=${lat}&lng=${lng}`,
-          { headers: { Authorization: `Bearer ${token}` } }
+          `/api/posts?feedType=${feedType}&locationRange=${locationRange}&lat=${lat}&lng=${lng}`, { credentials: 'include',   }
         );
         if (postsRes.status === 401 || postsRes.status === 403) { logout(); return; }
         const postsData = await postsRes.json();
@@ -210,9 +209,9 @@ export default function HomePage() {
         : [...prev.likedPostIds, postId],
     }));
     try {
-      await fetch(`/api/posts/${postId}/like`, {
+      await fetch(`/api/posts/${postId}/like`, { credentials: 'include', 
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        
       });
     } catch {}
   };
@@ -226,9 +225,9 @@ export default function HomePage() {
         : [...prev.savedPostIds, postId],
     }));
     try {
-      await fetch(`/api/posts/${postId}/save`, {
+      await fetch(`/api/posts/${postId}/save`, { credentials: 'include', 
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        
       });
     } catch {}
   };
@@ -242,7 +241,7 @@ export default function HomePage() {
         : [...prev.followedStoreIds, storeId],
     }));
     try {
-      await fetch(`/api/stores/${storeId}/follow`, {
+      await fetch(`/api/stores/${storeId}/follow`, { credentials: 'include', 
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ userId: user?.id }),

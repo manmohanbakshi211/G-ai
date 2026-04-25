@@ -12,10 +12,7 @@ export default function AdminLayout({ children, title }: AdminLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const token = localStorage.getItem('adminToken');
-    if (!token) navigate('/login');
-  }, [navigate]);
+  // Auth check is handled by App.tsx ProtectedRoute
 
 
 

@@ -313,3 +313,8 @@
 - What changed
 - Why it was changed / what bug it fixed
 ```
+## Migration to HttpOnly Cookies: Frontend refactoring complete
+- Replaced localStorage manual token appending with `credentials: 'include'` across fetch calls.
+- Updated AuthContext to verify sessions via `GET /api/me`.
+- Removed all manual references to `localStorage.getItem('token')`.
+- Updated Admin Panel Axios and fetch wrappers to use cookies.

@@ -25,7 +25,6 @@ export default function StoreProfilePage() {
   const userStr = localStorage.getItem('user');
   const currentUser = userStr ? JSON.parse(userStr) : null;
   const currentUserId = currentUser?.id || '';
-  const token = localStorage.getItem('token') || '';
   const currentUserRole = currentUser?.role || 'customer';
 
   const [interactions, setInteractions] = useState<{ likedPostIds: string[]; savedPostIds: string[]; followedStoreIds: string[] }>({
@@ -33,8 +32,8 @@ export default function StoreProfilePage() {
   });
 
   useEffect(() => {
-    if (currentUserId && token) {
-      fetch(`/api/me/interactions`, { headers: { Authorization: `Bearer ${token}` } })
+    if (currentUserId) {
+      fetch(`/api/me/interactions`, { credentials: 'include',   })
         .then(res => res.ok ? res.json() : null)
         .then(data => { if (data) setInteractions(data); })
         .catch(() => {});
@@ -44,13 +43,13 @@ export default function StoreProfilePage() {
   const toggleLike = async (postId: string) => {
     const isLiked = interactions.likedPostIds.includes(postId);
     setInteractions(prev => ({ ...prev, likedPostIds: isLiked ? prev.likedPostIds.filter(i => i !== postId) : [...prev.likedPostIds, postId] }));
-    try { await fetch(`/api/posts/${postId}/like`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (e) { console.error(e); }
+    try { await fetch(`/api/posts/${postId}/like`, { credentials: 'include',  method: 'POST',  }); } catch (e) { console.error(e); }
   };
 
   const toggleSave = async (postId: string) => {
     const isSaved = interactions.savedPostIds.includes(postId);
     setInteractions(prev => ({ ...prev, savedPostIds: isSaved ? prev.savedPostIds.filter(i => i !== postId) : [...prev.savedPostIds, postId] }));
-    try { await fetch(`/api/posts/${postId}/save`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch (e) { console.error(e); }
+    try { await fetch(`/api/posts/${postId}/save`, { credentials: 'include',  method: 'POST',  }); } catch (e) { console.error(e); }
   };
 
   const handleShare = async (post: any) => {
@@ -108,9 +107,9 @@ export default function StoreProfilePage() {
 
   const toggleFollow = async () => {
     try {
-      const res = await fetch(`/api/stores/${id}/follow`, {
+      const res = await fetch(`/api/stores/${id}/follow`, { credentials: 'include', 
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUserId }),
       });
       if (!res.ok) return;

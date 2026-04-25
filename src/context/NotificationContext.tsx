@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { useAuth } from './AuthContext';
 
 export interface Notification {
   id: string;
@@ -20,15 +21,15 @@ interface NotificationContextType {
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
 
   const fetchNotifications = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
+    if (!user) return;
     try {
-      const res = await fetch('/api/notifications', {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const res = await fetch('/api/notifications', { credentials: 'include', 
+        
       });
       if (res.ok) {
         setNotifications(await res.json());
@@ -39,14 +40,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
+    if (!user) return;
 
     fetchNotifications();
 
     const socketUrl = import.meta.env.VITE_API_URL || window.location.origin;
     const newSocket = io(socketUrl, {
-      auth: { token },
+      withCredentials: true,
       transports: ['websocket'],
     });
 
@@ -65,21 +65,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const markAsRead = async (id: string) => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
-    const token = localStorage.getItem('token');
-    if (!token) return;
-    await fetch(`/api/notifications/${id}/read`, {
+    if (!user) return;
+    await fetch(`/api/notifications/${id}/read`, { credentials: 'include', 
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` }
+      
     });
   };
 
   const markAllAsRead = async () => {
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-    const token = localStorage.getItem('token');
-    if (!token) return;
-    await fetch(`/api/notifications/read-all`, {
+    if (!user) return;
+    await fetch(`/api/notifications/read-all`, { credentials: 'include', 
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` }
+      
     });
   };
 

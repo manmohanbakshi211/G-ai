@@ -143,16 +143,14 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<Socket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const token = localStorage.getItem('token');
   const userStr = localStorage.getItem('user');
   const currentUser = userStr ? JSON.parse(userStr) : null;
   const currentUserId = currentUser?.id || '';
 
   // Fetch receiver info once
   useEffect(() => {
-    if (!userId || !token) return;
-    fetch(`/api/users/${userId}`, { headers: { 'Authorization': `Bearer ${token}` } })
+    if (!userId || !currentUserId) return;
+    fetch(`/api/users/${userId}`, { credentials: 'include',   })
       .then(res => res.ok ? res.json() : null)
       .then(async (userData) => {
         if (!userData) return;
@@ -172,20 +170,20 @@ export default function ChatPage() {
         setReceiverInitial((userData.name || 'U').charAt(0));
       })
       .catch(() => { setReceiverName('User'); setReceiverInitial('U'); });
-  }, [userId, token]);
+  }, [userId, currentUserId]);
 
   // Load message history once, then switch to Socket.IO for live updates
   useEffect(() => {
-    if (!currentUserId || !token || !userId) return;
+    if (!currentUserId || !userId) return;
 
-    fetch(`/api/messages/${currentUserId}/${userId}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
+    fetch(`/api/messages/${currentUserId}/${userId}`, { credentials: 'include', 
+      
     })
       .then(res => res.ok ? res.json() : { messages: [] })
       .then(data => setMessages(Array.isArray(data) ? data : (data.messages ?? [])))
       .catch(() => {});
 
-    const socket = io('/', { auth: { token }, transports: ['websocket'] });
+    const socket = io('/', { withCredentials: true, transports: ['websocket'] });
     socketRef.current = socket;
 
     socket.on('newMessage', (msg: any) => {
@@ -200,7 +198,7 @@ export default function ChatPage() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [userId, currentUserId, token]);
+  }, [userId, currentUserId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -225,9 +223,9 @@ export default function ChatPage() {
   };
 
   const sendRaw = async (body: object) => {
-    const res = await fetch('/api/messages', {
+    const res = await fetch('/api/messages', { credentials: 'include', 
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (res.ok) {
@@ -247,9 +245,9 @@ export default function ChatPage() {
       const formData = new FormData();
       formData.append('file', imageFile);
       try {
-        const res = await fetch('/api/upload', {
+        const res = await fetch('/api/upload', { credentials: 'include', 
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
+          
           body: formData
         });
         if (res.ok) {

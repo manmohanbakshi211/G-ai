@@ -30,19 +30,15 @@ export default function ReviewModal({ isOpen, onClose, targetId, targetType, tar
     setError('');
 
     try {
-      const token = localStorage.getItem('token');
       const body = {
         rating,
         comment,
         ...(targetType === 'store' ? { storeId: targetId } : { productId: targetId })
       };
 
-      const res = await fetch('/api/reviews', {
+      const res = await fetch('/api/reviews', { credentials: 'include', 
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
 

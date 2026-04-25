@@ -34,27 +34,46 @@ const teamMemberExists = async (teamMemberId: string): Promise<boolean> => {
   return exists;
 };
 
-export const authenticateToken = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const token = req.cookies?.dk_token || (req.headers['authorization']?.split(' ')[1]);
+// Shared token-verification logic
+const verifyAndAttach = async (
+  token: string | undefined,
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
   if (!token) return res.status(401).json({ error: "Access denied" });
-
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as any;
-    if (!decoded || !decoded.userId) return res.status(403).json({ error: "Invalid token" });
-
-    if (decoded.teamMemberId && !(await teamMemberExists(decoded.teamMemberId))) {
+    if (!decoded?.userId) return res.status(403).json({ error: "Invalid token" });
+    if (decoded.teamMemberId && !(await teamMemberExists(decoded.teamMemberId)))
       return res.status(403).json({ error: "Access revoked" });
-    }
-    if (await isUserBlocked(decoded.userId)) {
+    if (await isUserBlocked(decoded.userId))
       return res.status(403).json({ error: "Account blocked" });
-    }
-
     (req as any).user = decoded;
     next();
-  } catch (error) {
+  } catch {
     res.status(403).json({ error: "Invalid token" });
   }
 };
+
+// Main-app routes — reads dk_token only; admin sessions (dk_admin_token) are invisible here
+export const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.cookies?.dk_token || req.headers['authorization']?.split(' ')[1];
+  return verifyAndAttach(token, req, res, next);
+};
+
+// Admin-panel routes — reads dk_admin_token; falls back to Authorization header
+export const authenticateAdminToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.cookies?.dk_admin_token || req.headers['authorization']?.split(' ')[1];
+  return verifyAndAttach(token, req, res, next);
+};
+
+// Shared endpoints (e.g. /api/me) that both apps call — accepts either cookie
+export const authenticateAny = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.cookies?.dk_token || req.cookies?.dk_admin_token || req.headers['authorization']?.split(' ')[1];
+  return verifyAndAttach(token, req, res, next);
+};
+
 
 export const requireAdmin = (req: any, res: express.Response, next: express.NextFunction) => {
   if (req.user?.role !== "admin") return res.status(403).json({ error: "Forbidden" });

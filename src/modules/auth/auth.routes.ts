@@ -10,8 +10,8 @@ router.post("/users", authLimiter, validate(signupSchema), AuthController.signup
 router.post("/login", authLimiter, validate(loginSchema), AuthController.login);
 router.post("/logout", AuthController.logout);
 
-// Import authenticateToken for the /me route
-import { authenticateToken } from "../../middlewares/auth.middleware";
-router.get("/me", authenticateToken, AuthController.me);
+// /me is called by both the main app (dk_token) and admin panel (dk_admin_token)
+import { authenticateAny } from "../../middlewares/auth.middleware";
+router.get("/me", authenticateAny, AuthController.me);
 
 export const authRoutes = router;

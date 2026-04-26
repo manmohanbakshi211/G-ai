@@ -1,14 +1,20 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { MessageCircle, Search, X, ChevronRight } from 'lucide-react';
+import { io, Socket } from 'socket.io-client';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
 export default function MessagesPage() {
   const [conversations, setConversations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestedStores, setSuggestedStores] = useState<any[]>([]);
+  const [askNearbyCards, setAskNearbyCards] = useState<any[]>([]);
+  const [respondingIds, setRespondingIds] = useState<Set<string>>(new Set());
+  const socketRef = useRef<Socket | null>(null);
   const { token, user, isLoading: authLoading } = useAuth();
+  const { showToast } = useToast();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -37,6 +43,67 @@ export default function MessagesPage() {
       })
       .catch(() => {});
   }, [authLoading, user?.id]);
+
+  // Socket: listen for ask_nearby_request (retailer) + ask_nearby_confirmed (customer)
+  useEffect(() => {
+    if (!user) return;
+    const socketUrl = import.meta.env.VITE_API_URL || window.location.origin;
+    const socket = io(socketUrl, { withCredentials: true, transports: ['websocket'] });
+    socketRef.current = socket;
+
+    socket.on('ask_nearby_request', (data: any) => {
+      setAskNearbyCards(prev => {
+        if (prev.find(c => c.responseId === data.responseId)) return prev;
+        return [data, ...prev];
+      });
+    });
+
+    socket.on('ask_nearby_confirmed', (data: any) => {
+      showToast(`🎉 '${data.storeName}' ke paas stock hai! Chat mein jaao`);
+      // Refresh conversations so new chat appears
+      fetch('/api/conversations', { credentials: 'include' })
+        .then(r => r.ok ? r.json() : [])
+        .then(list => setConversations(list.map((c: any) => ({
+          ...c,
+          timestamp: new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }))))
+        .catch(() => {});
+    });
+
+    return () => { socket.disconnect(); socketRef.current = null; };
+  }, [user]);
+
+  const handleAskNearbyRespond = async (responseId: string, answer: 'yes' | 'no') => {
+    if (respondingIds.has(responseId)) return;
+    setRespondingIds(prev => new Set([...prev, responseId]));
+    try {
+      const res = await fetch('/api/ask-nearby/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ responseId, answer }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error || 'Kuch problem aayi'); return; }
+      // Remove card
+      setAskNearbyCards(prev => prev.filter(c => c.responseId !== responseId));
+      if (answer === 'yes') {
+        showToast('Chat shuru ho gayi! Customer ab aapko message kar sakta hai.');
+        // Refresh conversations
+        fetch('/api/conversations', { credentials: 'include' })
+          .then(r => r.ok ? r.json() : [])
+          .then(list => setConversations(list.map((c: any) => ({
+            ...c,
+            timestamp: new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }))))
+          .catch(() => {});
+      }
+    } catch {
+      showToast('Network error');
+    } finally {
+      setRespondingIds(prev => { const s = new Set(prev); s.delete(responseId); return s; });
+    }
+  };
 
   const filtered = conversations.filter(conv =>
     conv.storeName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -109,6 +176,59 @@ export default function MessagesPage() {
                 <div className="flex-1 space-y-2">
                   <div className="h-3 bg-gray-200 rounded w-1/3" />
                   <div className="h-2 bg-gray-200 rounded w-2/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Ask Nearby request cards (retailer side) ── */}
+        {askNearbyCards.length > 0 && (
+          <div className="px-4 space-y-3 mb-3">
+            {askNearbyCards.map(card => (
+              <div
+                key={card.responseId}
+                className="rounded-xl overflow-hidden"
+                style={{ background: 'white', borderLeft: '3px solid #f97316', border: '0.5px solid var(--dk-border)', borderLeftWidth: 3, borderLeftColor: '#f97316' }}
+              >
+                <div className="p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span
+                      className="px-2 py-0.5 rounded-full text-xs font-bold"
+                      style={{ background: '#fff3e0', color: '#f97316' }}
+                    >
+                      STOCK REQUEST 📦
+                    </span>
+                  </div>
+                  <p style={{ fontSize: 15, fontWeight: 700, color: 'var(--dk-text-primary)', marginBottom: 2 }}>
+                    {card.query}
+                  </p>
+                  {(card.areaLabel || card.radiusKm) && (
+                    <p style={{ fontSize: 12, color: 'var(--dk-text-tertiary)', marginBottom: 2 }}>
+                      📍 {card.radiusKm}km{card.areaLabel ? ` near ${card.areaLabel}` : ''}
+                    </p>
+                  )}
+                  <p style={{ fontSize: 11, color: 'var(--dk-text-tertiary)', marginBottom: 12 }}>
+                    Customer: {card.customerName} • Reply karo — wait kar raha hai
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleAskNearbyRespond(card.responseId, 'yes')}
+                      disabled={respondingIds.has(card.responseId)}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold"
+                      style={{ background: '#16a34a', color: 'white', opacity: respondingIds.has(card.responseId) ? 0.6 : 1 }}
+                    >
+                      ✅ Haan, hai stock!
+                    </button>
+                    <button
+                      onClick={() => handleAskNearbyRespond(card.responseId, 'no')}
+                      disabled={respondingIds.has(card.responseId)}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold"
+                      style={{ background: 'var(--dk-surface)', color: 'var(--dk-text-secondary)', border: '0.5px solid var(--dk-border)', opacity: respondingIds.has(card.responseId) ? 0.6 : 1 }}
+                    >
+                      ❌ Nahi hai
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

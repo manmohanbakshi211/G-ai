@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, Mic, ArrowUpRight } from 'lucide-react';
+import { Search as SearchIcon, Filter, MapPin, Store, X, SlidersHorizontal, Navigation, Clock, Mic, ArrowUpRight, ChevronRight } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import AppHeader from '../components/AppHeader';
 import { useAuth } from '../context/AuthContext';
 import { getStoreStatus, statusColor } from '../lib/storeUtils';
-import { useUserLocation } from '../context/LocationContext';
+import { useUserLocation, reverseGeocode } from '../context/LocationContext';
+import { useToast } from '../context/ToastContext';
 
 const TRENDING = ['PS5', 'iPhone 15', 'perfumes', 'earbuds'];
 
@@ -36,9 +37,20 @@ export default function SearchPage() {
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Ask Nearby modal state
+  const [askModalOpen, setAskModalOpen] = useState(false);
+  const [askQuery, setAskQuery] = useState('');
+  const [askAreaMode, setAskAreaMode] = useState<'my' | 'custom'>('my');
+  const [askCustomArea, setAskCustomArea] = useState('');
+  const [askRadius, setAskRadius] = useState(5);
+  const [askSending, setAskSending] = useState(false);
+  const [askResult, setAskResult] = useState<{ sentTo: number; storeNames: string[] } | null>(null);
+  const [askGeocodingArea, setAskGeocodingArea] = useState(false);
+
   const { token } = useAuth();
   const navigate = useNavigate();
   const { location: userLocCtx } = useUserLocation();
+  const { showToast } = useToast();
   const userLocation = userLocCtx ? { lat: userLocCtx.lat, lng: userLocCtx.lng } : null;
 
   useEffect(() => {
@@ -187,6 +199,74 @@ export default function SearchPage() {
         `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(store.address)}`,
         '_blank'
       );
+    }
+  };
+
+  const openAskModal = () => {
+    setAskQuery(query || '');
+    setAskAreaMode('my');
+    setAskCustomArea('');
+    setAskRadius(5);
+    setAskResult(null);
+    setAskModalOpen(true);
+  };
+
+  const handleAskSend = async () => {
+    if (!askQuery.trim() || askQuery.trim().length < 3) {
+      showToast('Kya chahiye? Thoda aur likho');
+      return;
+    }
+    if (!token) { showToast('Pehle login karo'); return; }
+
+    let lat: number, lng: number, areaLabel: string | undefined;
+
+    if (askAreaMode === 'my') {
+      if (!userLocation) { showToast('Location on karo'); return; }
+      lat = userLocation.lat;
+      lng = userLocation.lng;
+      areaLabel = userLocCtx?.name;
+    } else {
+      if (!askCustomArea.trim()) { showToast('Area ka naam likho'); return; }
+      setAskGeocodingArea(true);
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(askCustomArea)}&limit=1`,
+          { headers: { 'Accept-Language': 'en' } },
+        );
+        const data = await res.json();
+        if (!data?.length) {
+          showToast('Area nahi mila, dobara try karo');
+          setAskGeocodingArea(false);
+          return;
+        }
+        lat = parseFloat(data[0].lat);
+        lng = parseFloat(data[0].lon);
+        areaLabel = askCustomArea.trim();
+      } catch {
+        showToast('Area nahi mila, dobara try karo');
+        setAskGeocodingArea(false);
+        return;
+      } finally {
+        setAskGeocodingArea(false);
+      }
+    }
+
+    setAskSending(true);
+    try {
+      const res = await fetch('/api/ask-nearby/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ query: askQuery.trim(), radiusKm: askRadius, latitude: lat, longitude: lng, areaLabel }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error || 'Kuch problem aayi, dobara try karo'); return; }
+      if (data.found === 0) { showToast(data.message || 'Koi matching store nahi mila'); return; }
+      setAskResult({ sentTo: data.sentTo, storeNames: data.storeNames });
+    } catch {
+      showToast('Network error, dobara try karo');
+    } finally {
+      setAskSending(false);
     }
   };
 
@@ -616,10 +696,205 @@ export default function SearchPage() {
                   </p>
                 </div>
               )}
+
+              {/* Ask Nearby suggestion card — show when typing */}
+              {isSearching && !loading && (
+                <div
+                  className="mt-4 rounded-2xl overflow-hidden"
+                  style={{ background: 'linear-gradient(135deg, #1A1A1A 0%, #2a1a00 100%)', border: '0.5px solid #333' }}
+                >
+                  <div className="p-4">
+                    <div className="flex items-start gap-3">
+                      <span style={{ fontSize: 26 }}>📍</span>
+                      <div className="flex-1 min-w-0">
+                        <p style={{ fontSize: 15, fontWeight: 700, color: 'white', marginBottom: 3 }}>
+                          Aur dhundho nearby?
+                        </p>
+                        <p style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5 }}>
+                          Aapke area ki shops se seedha poocho — sirf wahi dikhenge jiske paas stock hai
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={openAskModal}
+                      className="w-full mt-3 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm"
+                      style={{ background: 'var(--dk-accent)', color: 'white' }}
+                    >
+                      Nearby shops se poocho
+                      <ChevronRight size={15} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </main>
       </div>
+
+      {/* ── Ask Nearby Bottom Sheet Modal ── */}
+      {askModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end"
+          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+          onClick={e => { if (e.target === e.currentTarget) { setAskModalOpen(false); setAskResult(null); } }}
+        >
+          <div
+            className="w-full max-w-md mx-auto rounded-t-3xl overflow-hidden"
+            style={{ background: 'var(--dk-bg)', maxHeight: '90vh', overflowY: 'auto', paddingBottom: 32 }}
+          >
+            {/* Handle */}
+            <div className="flex justify-center pt-3 pb-1">
+              <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--dk-border-strong)' }} />
+            </div>
+
+            <div className="px-5 pt-2 pb-4">
+              <div className="flex items-center justify-between mb-5">
+                <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--dk-text-primary)' }}>
+                  📍 Nearby Shops se Poocho
+                </h2>
+                <button onClick={() => { setAskModalOpen(false); setAskResult(null); }}>
+                  <X size={20} style={{ color: 'var(--dk-text-tertiary)' }} />
+                </button>
+              </div>
+
+              {askResult ? (
+                /* Success state */
+                <div className="text-center py-6">
+                  <div style={{ fontSize: 48 }}>✅</div>
+                  <p style={{ fontSize: 18, fontWeight: 700, color: 'var(--dk-text-primary)', marginTop: 12 }}>
+                    {askResult.sentTo} shops ko message gaya!
+                  </p>
+                  <p style={{ fontSize: 13, color: 'var(--dk-text-secondary)', marginTop: 6, lineHeight: 1.5 }}>
+                    Jo haan bolein woh Chat mein aayenge. Check karo Messages tab.
+                  </p>
+                  {askResult.storeNames.length > 0 && (
+                    <div className="mt-4 text-left rounded-xl p-3" style={{ background: 'var(--dk-surface)' }}>
+                      <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--dk-text-tertiary)', marginBottom: 6, textTransform: 'uppercase' }}>
+                        Shops notified
+                      </p>
+                      {askResult.storeNames.slice(0, 5).map((n, i) => (
+                        <p key={i} style={{ fontSize: 13, color: 'var(--dk-text-primary)', marginBottom: 2 }}>• {n}</p>
+                      ))}
+                      {askResult.storeNames.length > 5 && (
+                        <p style={{ fontSize: 12, color: 'var(--dk-text-tertiary)' }}>+{askResult.storeNames.length - 5} more</p>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => { setAskModalOpen(false); setAskResult(null); navigate('/messages'); }}
+                    className="mt-5 w-full py-3 rounded-xl font-semibold text-sm"
+                    style={{ background: 'var(--dk-accent)', color: 'white' }}
+                  >
+                    Messages mein jaao
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Section 1: Query */}
+                  <div className="mb-5">
+                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--dk-text-tertiary)', marginBottom: 8, textTransform: 'uppercase' }}>
+                      Kya chahiye?
+                    </p>
+                    <input
+                      type="text"
+                      value={askQuery}
+                      onChange={e => setAskQuery(e.target.value)}
+                      placeholder="e.g. PS5, iPhone 15, red kurta..."
+                      className="w-full px-4 py-3 rounded-xl text-sm outline-none"
+                      style={{
+                        background: 'var(--dk-surface)',
+                        color: 'var(--dk-text-primary)',
+                        border: '0.5px solid var(--dk-border)',
+                      }}
+                    />
+                  </div>
+
+                  {/* Section 2: Area */}
+                  <div className="mb-5">
+                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--dk-text-tertiary)', marginBottom: 8, textTransform: 'uppercase' }}>
+                      Kahan dhundho?
+                    </p>
+                    <div className="flex gap-2 mb-3">
+                      {(['my', 'custom'] as const).map(mode => (
+                        <button
+                          key={mode}
+                          onClick={() => setAskAreaMode(mode)}
+                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+                          style={{
+                            background: askAreaMode === mode ? 'var(--dk-accent)' : 'var(--dk-surface)',
+                            color: askAreaMode === mode ? 'white' : 'var(--dk-text-secondary)',
+                            border: '0.5px solid var(--dk-border)',
+                          }}
+                        >
+                          {mode === 'my' ? '📍 Meri location' : '🔍 Alag area'}
+                        </button>
+                      ))}
+                    </div>
+                    {askAreaMode === 'my' ? (
+                      userLocCtx ? (
+                        <p style={{ fontSize: 13, color: 'var(--dk-text-secondary)' }}>
+                          📍 {userLocCtx.name}
+                        </p>
+                      ) : (
+                        <p style={{ fontSize: 13, color: '#f97316' }}>Location detect nahi ho rahi — settings check karo</p>
+                      )
+                    ) : (
+                      <input
+                        type="text"
+                        value={askCustomArea}
+                        onChange={e => setAskCustomArea(e.target.value)}
+                        placeholder="Area ka naam ya pincode (e.g. Kurla West, 400070)"
+                        className="w-full px-4 py-3 rounded-xl text-sm outline-none"
+                        style={{
+                          background: 'var(--dk-surface)',
+                          color: 'var(--dk-text-primary)',
+                          border: '0.5px solid var(--dk-border)',
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Section 3: Radius slider */}
+                  <div className="mb-6">
+                    <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--dk-text-tertiary)', marginBottom: 8, textTransform: 'uppercase' }}>
+                      Kitne door tak?
+                    </p>
+                    <div className="flex items-center justify-between mb-2">
+                      <span style={{ fontSize: 13, color: 'var(--dk-text-secondary)' }}>1 km</span>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--dk-accent)' }}>{askRadius} km ke andar</span>
+                      <span style={{ fontSize: 13, color: 'var(--dk-text-secondary)' }}>20 km</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={20}
+                      step={1}
+                      value={askRadius}
+                      onChange={e => setAskRadius(Number(e.target.value))}
+                      className="w-full"
+                      style={{ accentColor: 'var(--dk-accent)' }}
+                    />
+                  </div>
+
+                  {/* Send button */}
+                  <button
+                    onClick={handleAskSend}
+                    disabled={askSending || askGeocodingArea}
+                    className="w-full py-3.5 rounded-xl font-semibold text-sm"
+                    style={{ background: 'var(--dk-accent)', color: 'white', opacity: askSending || askGeocodingArea ? 0.7 : 1 }}
+                  >
+                    {askGeocodingArea
+                      ? 'Area dhundh rahe hain...'
+                      : askSending
+                      ? 'Shops dhundh rahe hain...'
+                      : `📨 ${askRadius} km mein shops ko poocho`}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

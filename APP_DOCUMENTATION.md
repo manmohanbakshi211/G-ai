@@ -132,6 +132,8 @@ Nginx (port 80/443)
 | `Like` | Post likes |
 | `Category` | Product/store categories |
 | `AppSettings` | Global app config (name, logo, colors, carousel images) — singleton row |
+| `AskNearbyRequest` | Customer broadcast query — stores query, radius, coordinates, areaLabel |
+| `AskNearbyResponse` | Per-store response record — tracks pending/yes/no status and optional conversationId |
 
 ### Key field notes
 - `Post.isOpeningPost` — the store's main photo; always displayed first, never expires
@@ -212,6 +214,32 @@ Non-customer roles (retailer, supplier, brand, manufacturer) must complete KYC b
   - **approved** — prompt to create store
   - **rejected** — show rejection reason + re-submit option
 - Store setup after KYC approval
+
+### Ask Nearby (`/search` → modal + `/messages`)
+Lets customers broadcast an availability query to multiple nearby stores at once.
+
+**Customer flow:**
+1. Search for something (e.g. "PS5")
+2. "Aur dhundho nearby?" card appears below results
+3. Click → bottom sheet opens pre-filled with search term
+4. Pick area (current GPS location or custom area/pincode via Nominatim geocoding), set radius (1-20 km)
+5. Tap "Shops ko poocho" → backend finds stores within radius that have a matching product name → sends Socket.IO event to each store owner
+6. Customer sees success screen: "8 shops ko message gaya!"
+7. When a shop taps "Yes", customer gets toast notification + new conversation appears in Messages
+
+**Retailer flow:**
+1. Receives `ask_nearby_request` socket event
+2. "STOCK REQUEST" card appears in Messages page with Yes/No buttons
+3. Tap "✅ Haan, hai stock!" → auto-message sent to customer, conversation appears in both users' chats
+4. Tap "❌ Nahi hai" → card disappears silently, customer sees nothing from this store
+
+**Backend logic:**
+- Haversine formula for radius filtering
+- Product name ILIKE match (case-insensitive) to verify stock relevance
+- Max 15 stores per broadcast
+- Rate limit: 5 requests/hour per customer
+- `AskNearbyRequest` + `AskNearbyResponse` DB models track the full lifecycle
+- Socket events: `ask_nearby_request` (to owner), `ask_nearby_confirmed` (to customer)
 
 ### Chat (`/chat`, `/chat/:userId`)
 - Real-time direct messaging via Socket.IO

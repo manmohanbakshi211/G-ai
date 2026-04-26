@@ -43,6 +43,7 @@ model User {
   reportsMade      Report[] @relation("ReportsMade")
   reportsReceived  Report[] @relation("ReportsReceived")
   complaints       Complaint[]
+  askNearbyRequests AskNearbyRequest[] @relation("AskNearbyCustomer")
 }
 
 model Store {
@@ -81,7 +82,8 @@ model Store {
   state         String?
   manualProductText String?
   teamMembers   TeamMember[]
-  reportsAgainst Report[] @relation("ReportedStores")
+  reportsAgainst    Report[] @relation("ReportedStores")
+  askNearbyResponses AskNearbyResponse[]
 
   @@index([ownerId])
   @@index([category])
@@ -288,4 +290,34 @@ model Complaint {
   adminNotes  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model AskNearbyRequest {
+  id         String              @id @default(uuid())
+  customerId String
+  query      String
+  radiusKm   Int                 @default(5)
+  latitude   Float
+  longitude  Float
+  areaLabel  String?
+  createdAt  DateTime            @default(now())
+  responses  AskNearbyResponse[]
+  customer   User                @relation("AskNearbyCustomer", fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+model AskNearbyResponse {
+  id             String           @id @default(uuid())
+  requestId      String
+  storeId        String
+  ownerId        String
+  status         String           @default("pending")
+  conversationId String?
+  respondedAt    DateTime?
+  request        AskNearbyRequest @relation(fields: [requestId], references: [id])
+  store          Store            @relation(fields: [storeId], references: [id])
+
+  @@index([requestId])
+  @@index([ownerId])
 }

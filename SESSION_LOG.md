@@ -6,6 +6,26 @@
 
 ---
 
+## 2026-04-27 — Session 13 (Ask Nearby — smart availability broadcast from search)
+
+### New Files
+- `src/modules/ask-nearby/ask-nearby.service.ts` — Haversine radius search, product ILIKE filter, Socket.IO broadcast, yes/no respond, auto-message on yes
+- `src/modules/ask-nearby/ask-nearby.controller.ts` — Input validation, hourly rate limit (5/user)
+- `src/modules/ask-nearby/ask-nearby.routes.ts` — POST /send, POST /respond, GET /my-requests
+- `prisma/migrations/20260426193554_ask_nearby/migration.sql` — AskNearbyRequest + AskNearbyResponse tables
+
+### Modified Files
+- `prisma/schema.prisma` — Added `AskNearbyRequest`, `AskNearbyResponse` models; relations on User + Store
+- `src/app.ts` — Registered `askNearbyRoutes` at `/api/ask-nearby`
+- `src/pages/Search.tsx` — Ask Nearby suggestion card after results; full bottom sheet modal (query, area toggle, radius slider, Nominatim geocoding for custom area, success state)
+- `src/pages/Messages.tsx` — Socket listener for `ask_nearby_request` → Yes/No stock request cards; socket listener for `ask_nearby_confirmed` → toast + conversation refresh
+
+### Socket Events
+- `ask_nearby_request` → emitted to store owner's room: `{ requestId, responseId, query, customerName, areaLabel, radiusKm }`
+- `ask_nearby_confirmed` → emitted to customer's room: `{ storeId, storeName, conversationId }`
+
+---
+
 ## 2026-04-26 — Session 12 (AI features: photo-to-post, voice-to-post, AI store description)
 
 ### New Files

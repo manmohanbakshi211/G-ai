@@ -38,7 +38,7 @@
 - Strip markdown from responses before JSON.parse
 
 ## Active Issues (update this section as things get fixed)
-- [ ] Ask Nearby: POST /api/ask-nearby/send returns network error — check route in src/app.ts + prisma migration
+- None
 
 ## Completed Features
 - JWT httpOnly cookies auth
@@ -49,4 +49,4 @@
 - AI Photo-to-Post (geminiVision.ts)
 - AI Voice-to-Post (geminiVision.ts)
 - AI Store Description modal
-- Ask Nearby (partial — network error)
+- Ask Nearby (radius search, Yes/No availability, auto chat)

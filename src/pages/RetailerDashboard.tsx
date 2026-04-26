@@ -310,6 +310,10 @@ export default function RetailerDashboard() {
       if (res.status === 429) { showToast('Thodi der baad try karo — AI abhi busy hai', { type: 'warning' }); return; }
       if (!res.ok) { showToast('AI abhi available nahi, manually bharo', { type: 'error' }); return; }
       const data = await res.json();
+      if (!data.bio?.trim()) {
+        showToast('AI se generate nahi hua, dobara try karo', { type: 'error' });
+        return;
+      }
       setAiDescResult(data);
       setAiModalStep('result');
     } catch {

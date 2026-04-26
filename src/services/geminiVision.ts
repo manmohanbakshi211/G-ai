@@ -38,7 +38,7 @@ export async function analyzeProductImage(
   const t0 = Date.now();
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-001',
+      model: 'gemini-1.5-flash',
       contents: [
         {
           parts: [
@@ -87,7 +87,7 @@ export async function transcribeAndStructureVoice(
   const t0 = Date.now();
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-001',
+      model: 'gemini-1.5-flash',
       contents: [
         {
           parts: [
@@ -135,7 +135,7 @@ export async function generateStoreDescription(
   try {
     const description = userContext?.trim() || 'general store';
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-001',
+      model: 'gemini-1.5-flash',
       contents: [
         {
           parts: [

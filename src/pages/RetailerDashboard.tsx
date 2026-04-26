@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, MapPin, Camera, Navigation, Check, Clock, Shield, Upload, AlertTriangle, Loader2, Store, Sparkles, X } from 'lucide-react';
+import { ArrowLeft, MapPin, Camera, Navigation, Check, Clock, Shield, Upload, AlertTriangle, Loader2, Store, Sparkles, X, Mic, MicOff } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import NotificationBell from '../components/NotificationBell';
 import { useAuth } from '../context/AuthContext';
@@ -40,11 +40,14 @@ export default function RetailerDashboard() {
   // AI bio modal state
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiModalStep, setAiModalStep] = useState<'input' | 'result'>('input');
-  const [aiSells, setAiSells] = useState('');
-  const [aiUniqueness, setAiUniqueness] = useState('');
-  const [aiTone, setAiTone] = useState<'Professional' | 'Friendly' | 'Desi/Casual'>('Friendly');
+  const [aiUserContext, setAiUserContext] = useState('');
   const [aiDescLoading, setAiDescLoading] = useState(false);
   const [aiDescResult, setAiDescResult] = useState<{ bio: string; tagline: string } | null>(null);
+  const [aiIsRecording, setAiIsRecording] = useState(false);
+  const [aiRecordingSeconds, setAiRecordingSeconds] = useState(0);
+  const aiMediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const aiAudioChunksRef = useRef<Blob[]>([]);
+  const aiTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
 
   const [kycStatus, setKycStatus] = useState<string>('none');
@@ -286,9 +289,9 @@ export default function RetailerDashboard() {
   const openAiModal = () => {
     setAiModalStep('input');
     setAiDescResult(null);
-    setAiSells('');
-    setAiUniqueness('');
-    setAiTone('Friendly');
+    setAiUserContext('');
+    setAiIsRecording(false);
+    setAiRecordingSeconds(0);
     setAiModalOpen(true);
   };
 
@@ -302,11 +305,7 @@ export default function RetailerDashboard() {
         credentials: 'include',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          storeName,
-          category: selectedCategory,
-          userContext: { sells: aiSells.trim(), uniqueness: aiUniqueness.trim(), tone: aiTone },
-        }),
+        body: JSON.stringify({ storeName, category: selectedCategory, userContext: aiUserContext.trim() }),
       });
       if (res.status === 429) { showToast('Thodi der baad try karo — AI abhi busy hai', { type: 'warning' }); return; }
       if (!res.ok) { showToast('AI abhi available nahi, manually bharo', { type: 'error' }); return; }
@@ -319,6 +318,57 @@ export default function RetailerDashboard() {
       setAiDescLoading(false);
     }
   };
+
+  const startAiRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      aiAudioChunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) aiAudioChunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (aiTimerRef.current) clearInterval(aiTimerRef.current);
+        setAiRecordingSeconds(0);
+        setAiIsRecording(false);
+        const blob = new Blob(aiAudioChunksRef.current, { type: 'audio/webm' });
+        setAiDescLoading(true);
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve((reader.result as string).split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+          const res = await fetch('/api/ai/transcribe-voice', {
+            credentials: 'include',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audioBase64: base64, mimeType: 'audio/webm' }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const transcript = [data.productName, data.caption].filter(Boolean).join(' — ');
+            if (transcript) setAiUserContext(prev => prev ? `${prev} ${transcript}` : transcript);
+          } else {
+            showToast('Voice transcription failed, manually likho', { type: 'error' });
+          }
+        } catch {
+          showToast('AI abhi available nahi, manually bharo', { type: 'error' });
+        } finally {
+          setAiDescLoading(false);
+        }
+      };
+      aiMediaRecorderRef.current = recorder;
+      recorder.start();
+      setAiIsRecording(true);
+      setAiRecordingSeconds(0);
+      aiTimerRef.current = setInterval(() => setAiRecordingSeconds(s => s + 1), 1000);
+    } catch {
+      showToast('Microphone access nahi mila', { type: 'error' });
+    }
+  };
+
+  const stopAiRecording = () => { aiMediaRecorderRef.current?.stop(); };
 
   // KYC upload handler
   const handleKycUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'doc' | 'selfie' | 'store') => {
@@ -868,65 +918,51 @@ export default function RetailerDashboard() {
               </button>
             </div>
             <p className="mb-4 text-xs" style={{ color: 'var(--dk-text-tertiary)', lineHeight: 1.5 }}>
-              Thodi information do — AI aapki dukaan ke liye perfect bio likhega
+              Apni dukaan ke baare mein kuch bolo ya likho — AI perfect bio banayega
             </p>
 
             {aiModalStep === 'input' ? (
-              <div className="space-y-4">
-                {/* Field A */}
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--dk-text-tertiary)' }}>
-                    Aapki dukaan kya bechti hai?
-                  </label>
+              <div className="space-y-3">
+                {/* Single context input with mic button */}
+                <div className="relative">
                   <textarea
-                    className="w-full p-3 rounded-xl outline-none text-sm dk-input"
-                    rows={2}
-                    placeholder="e.g. Mobile phones, accessories, repairs"
-                    value={aiSells}
-                    onChange={(e) => setAiSells(e.target.value)}
+                    className="w-full p-3 pb-10 rounded-xl outline-none text-sm dk-input"
+                    rows={4}
+                    placeholder="e.g. meri electronics shop hai, mobiles aur accessories bechta hu, 10 saal ka experience hai, Kurla mein famous hu..."
+                    value={aiUserContext}
+                    onChange={(e) => setAiUserContext(e.target.value)}
                   />
+                  {/* Mic button inside textarea */}
+                  <button
+                    type="button"
+                    onClick={aiIsRecording ? stopAiRecording : startAiRecording}
+                    disabled={aiDescLoading}
+                    className="absolute bottom-2 right-2 flex items-center justify-center rounded-full disabled:opacity-50"
+                    style={{
+                      width: 32, height: 32,
+                      background: aiIsRecording ? '#EF4444' : 'var(--dk-accent)',
+                    }}
+                    title={aiIsRecording ? 'Stop recording' : 'Voice se bolo'}
+                  >
+                    {aiIsRecording
+                      ? <MicOff size={14} color="white" />
+                      : <Mic size={14} color="white" />}
+                  </button>
                 </div>
-                {/* Field B */}
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--dk-text-tertiary)' }}>
-                    Koi khaas cheez? <span className="normal-case font-normal">(optional)</span>
-                  </label>
-                  <textarea
-                    className="w-full p-3 rounded-xl outline-none text-sm dk-input"
-                    rows={2}
-                    placeholder="e.g. 10 saal ka experience, best price guarantee, free delivery"
-                    value={aiUniqueness}
-                    onChange={(e) => setAiUniqueness(e.target.value)}
-                  />
-                </div>
-                {/* Tone picker */}
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--dk-text-tertiary)' }}>
-                    Tone kaisi chahiye?
-                  </label>
-                  <div className="flex gap-2">
-                    {(['Professional', 'Friendly', 'Desi/Casual'] as const).map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        onClick={() => setAiTone(t)}
-                        className="flex-1 py-1.5 rounded-full text-xs font-semibold"
-                        style={{
-                          background: aiTone === t ? 'var(--dk-accent)' : 'var(--dk-surface)',
-                          color: aiTone === t ? 'white' : 'var(--dk-text-secondary)',
-                          border: '0.5px solid var(--dk-border)',
-                        }}
-                      >
-                        {t}
-                      </button>
-                    ))}
+                {/* Recording indicator */}
+                {aiIsRecording && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#EF4444', flexShrink: 0 }} />
+                    <p className="text-xs" style={{ color: 'var(--dk-text-tertiary)' }}>
+                      Recording... {aiRecordingSeconds}s — ruk ne ke liye mic dabao
+                    </p>
                   </div>
-                </div>
+                )}
                 {/* Generate button */}
                 <button
                   type="button"
                   onClick={handleAiGenerate}
-                  disabled={aiDescLoading}
+                  disabled={aiDescLoading || aiIsRecording}
                   className="w-full py-3 rounded-xl font-bold text-sm disabled:opacity-60 flex items-center justify-center gap-2"
                   style={{ background: 'var(--dk-accent)', color: 'white' }}
                 >

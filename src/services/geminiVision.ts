@@ -125,23 +125,15 @@ export interface StoreDescriptionResult {
   tagline: string;
 }
 
-export interface UserContext {
-  sells?: string;
-  uniqueness?: string;
-  tone?: string;
-}
-
 export async function generateStoreDescription(
   storeName: string,
   category: string,
-  userContext?: UserContext,
+  userContext?: string,
 ): Promise<StoreDescriptionResult> {
   const defaults: StoreDescriptionResult = { bio: '', tagline: '' };
   const t0 = Date.now();
   try {
-    const sells = userContext?.sells || 'general products';
-    const uniqueness = userContext?.uniqueness || 'quality and trust';
-    const tone = userContext?.tone || 'Friendly';
+    const description = userContext?.trim() || 'general store';
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash-001',
       contents: [
@@ -150,12 +142,10 @@ export async function generateStoreDescription(
             {
               text: `Generate for an Indian local retail store:
 Store name: ${storeName}, Category: ${category}
-What they sell: ${sells}
-What makes them unique: ${uniqueness}
-Tone: ${tone}
+User description: ${description}
 Return ONLY valid JSON:
-- bio: engaging store bio in Hinglish, ${tone} tone, mention local/trusted angle, max 180 chars
-- tagline: catchy 5-7 word tagline matching the tone`,
+- bio: engaging store bio in Hinglish, friendly tone, mention local/trusted angle, max 180 chars
+- tagline: catchy 5-7 word Hindi/English tagline`,
             },
           ],
         },

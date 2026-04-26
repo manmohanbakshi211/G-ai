@@ -71,7 +71,11 @@ export class AiController {
       return res.status(400).json({ error: 'category is required' });
     }
 
-    const result = await generateStoreDescription(storeName.trim(), category.trim(), userContext);
+    const result = await generateStoreDescription(
+      storeName.trim(),
+      category.trim(),
+      typeof userContext === 'string' ? userContext : undefined,
+    );
     res.json(result);
   }
 }
